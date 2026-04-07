@@ -1,0 +1,45 @@
+# Environment
+.env
+*.env.local
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+
+# WhatsApp Sessions
+sessions/
+auth_info_baileys/
+
+# Database
+data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Logs
+logs/
+*.log
+
+# Tailwind build output (regenerated)
+node-app/src/public/css/output.css
