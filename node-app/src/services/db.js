@@ -70,10 +70,47 @@ const SCHEMA_SQLITE = `
     FOREIGN KEY (server_id) REFERENCES idrac_servers(id)
   );
 
+  CREATE TABLE IF NOT EXISTS schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('power', 'redfish')),
+    action TEXT NOT NULL,
+    schedule_time TEXT NOT NULL,
+    schedule_mode TEXT NOT NULL DEFAULT 'once' CHECK(schedule_mode IN ('once', 'weekly', 'specific')),
+    schedule_date TEXT DEFAULT NULL,
+    specific_repeat INTEGER DEFAULT 0,
+    description TEXT DEFAULT '',
+    is_enabled INTEGER DEFAULT 1,
+    last_run_at DATETIME,
+    last_result TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS schedule_days (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    schedule_id INTEGER NOT NULL,
+    day_of_week INTEGER NOT NULL CHECK(day_of_week BETWEEN 0 AND 6),
+    FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE,
+    UNIQUE(schedule_id, day_of_week)
+  );
+
+  CREATE TABLE IF NOT EXISTS schedule_dates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    schedule_id INTEGER NOT NULL,
+    month INTEGER NOT NULL CHECK(month BETWEEN 1 AND 12),
+    day INTEGER NOT NULL CHECK(day BETWEEN 1 AND 31),
+    FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE,
+    UNIQUE(schedule_id, month, day)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_cmd_logs_created ON command_logs(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_cmd_logs_sender ON command_logs(sender_number);
   CREATE INDEX IF NOT EXISTS idx_alert_logs_created ON alert_logs(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_servers_active ON idrac_servers(is_active);
+  CREATE INDEX IF NOT EXISTS idx_schedules_enabled ON schedules(is_enabled);
+  CREATE INDEX IF NOT EXISTS idx_schedule_days_sid ON schedule_days(schedule_id);
+  CREATE INDEX IF NOT EXISTS idx_schedule_dates_sid ON schedule_dates(schedule_id);
 `;
 
 const SCHEMA_POSTGRES = `
@@ -119,10 +156,47 @@ const SCHEMA_POSTGRES = `
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS schedules (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    type VARCHAR(20) NOT NULL CHECK(type IN ('power', 'redfish')),
+    action TEXT NOT NULL,
+    schedule_time VARCHAR(5) NOT NULL,
+    schedule_mode VARCHAR(20) NOT NULL DEFAULT 'once' CHECK(schedule_mode IN ('once', 'weekly', 'specific')),
+    schedule_date VARCHAR(10) DEFAULT NULL,
+    specific_repeat BOOLEAN DEFAULT FALSE,
+    description TEXT DEFAULT '',
+    is_enabled BOOLEAN DEFAULT TRUE,
+    last_run_at TIMESTAMP,
+    last_result TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS schedule_days (
+    id SERIAL PRIMARY KEY,
+    schedule_id INTEGER NOT NULL,
+    day_of_week INTEGER NOT NULL CHECK(day_of_week BETWEEN 0 AND 6),
+    FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE,
+    UNIQUE(schedule_id, day_of_week)
+  );
+
+  CREATE TABLE IF NOT EXISTS schedule_dates (
+    id SERIAL PRIMARY KEY,
+    schedule_id INTEGER NOT NULL,
+    month INTEGER NOT NULL CHECK(month BETWEEN 1 AND 12),
+    day INTEGER NOT NULL CHECK(day BETWEEN 1 AND 31),
+    FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE,
+    UNIQUE(schedule_id, month, day)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_cmd_logs_created ON command_logs(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_cmd_logs_sender ON command_logs(sender_number);
   CREATE INDEX IF NOT EXISTS idx_alert_logs_created ON alert_logs(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_servers_active ON idrac_servers(is_active);
+  CREATE INDEX IF NOT EXISTS idx_schedules_enabled ON schedules(is_enabled);
+  CREATE INDEX IF NOT EXISTS idx_schedule_days_sid ON schedule_days(schedule_id);
+  CREATE INDEX IF NOT EXISTS idx_schedule_dates_sid ON schedule_dates(schedule_id);
 `;
 
 // ── Initialize Database ────────────────────────────
@@ -231,7 +305,11 @@ async function queryOne(sql, params = []) {
  */
 async function execute(sql, params = []) {
   if (activeDriver === 'postgres') {
-    const result = await pgPool.query(sql, params);
+    let pgSql = sql;
+    if (pgSql.trim().toUpperCase().startsWith('INSERT') && !pgSql.toUpperCase().includes('RETURNING')) {
+      pgSql += ' RETURNING id';
+    }
+    const result = await pgPool.query(pgSql, params);
     return {
       changes: result.rowCount,
       lastInsertRowid: result.rows?.[0]?.id,

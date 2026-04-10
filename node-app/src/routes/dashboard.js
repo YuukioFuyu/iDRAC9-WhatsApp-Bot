@@ -36,4 +36,11 @@ export default async function dashboardRoutes(fastify) {
       commandPrefix: config.whatsapp.commandPrefix,
     });
   });
+
+  // ── GET /schedule — Schedule management page ─────
+  fastify.get('/schedule', async (request, reply) => {
+    return reply.view('schedule.html', {
+      user: request.user,
+    });
+  });
 }
