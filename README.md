@@ -8,17 +8,43 @@
 ![Docker](https://img.shields.io/badge/Docker-Compose-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+## ✨ Highlights
+
+- 🖥️ **Full iDRAC 9 Redfish** — Monitor & kontrol server Dell via REST API
+- 📱 **WhatsApp Bot** — via Baileys (multi-device), dengan QR / Pairing Code
+- 🌐 **Web Dashboard** — Login, monitoring, kontrol WhatsApp connection
+- ⏳ **Task Scheduler** — Otomatisasi multi-mode (Once, Weekly, Specific Dates) untuk eksekusi server
+- 🔔 **Auto Alert** — Notifikasi otomatis: power change, health degradation, temp spike, event log
+- 🗄️ **Dual Database** — PostgreSQL (primary) + SQLite (fallback)
+- 🔒 **Security** — JWT httpOnly, bcrypt, whitelist, rate limit, Docker network isolation
+
+---
+
 ## 📐 Architecture
 
 ```
-[ User (WhatsApp) ] ──→ [ Node.js :3000 ] ──REST──→ [ Python :8000 ] ──Redfish──→ [ iDRAC 9 ]
-                              │
-                     [ Web Dashboard ]
+┌────────────────────────────────────────────────────────────────────────┐
+│                         iDRAC9 WhatsApp Bot                            │
+│                                                                        │
+│  ┌──────────┐     ┌─────────────────────────────────┐     ┌─────────┐  │
+│  │  User    │     │     Node.js (Fastify :3000)     │     │ Python  │  │
+│  │ WhatsApp │◄───►│  ┌─────────┐  ┌──────────────┐  │REST │ FastAPI │  │
+│  │          │     │  │ Baileys │  │ Web Dashboard│  │────►│ :8000   │  │
+│  └──────────┘     │  └────┬────┘  └──────────────┘  │     └────┬────┘  │
+│                   │       │                         │          │       │
+│                   │  ┌────▼────────────────────┐    │     ┌────▼────┐  │
+│                   │  │ Command Parser          │    │     │Redfish  │  │
+│                   │  │ Task Scheduler          │    │     │Client   │  │
+│                   │  │ Server Analyzer         │    │     └────┬────┘  │
+│                   │  └─────────────────────────┘    │          │       │
+│                   └─────────────────────────────────┘     ┌────▼────┐  │
+│                                                           │ iDRAC 9 │  │
+│                                                           │ Server  │  │
+│                                                           └─────────┘  │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Node.js (Fastify)** — WhatsApp Bot + Web Dashboard + REST API
-- **Python (FastAPI)** — iDRAC Redfish Bridge (session management, caching, retry)
-- **Decoupled** — Setiap service bisa di-scale dan di-deploy independen
+---
 
 ## ⚡ Quick Start
 
@@ -135,6 +161,20 @@ Monitors secara otomatis:
 - 📋 New SEL entries
 
 Konfigurasi: `ALERT_ENABLED`, `ALERT_POLL_INTERVAL`, `ALERT_TEMP_THRESHOLD`
+
+---
+
+## ⏳ Schedule Automation
+
+Sistem otomatisasi server tingkat lanjut (cron-like) terintegrasi pada Dashboard.
+
+- **Once Only**: Jalan sekali pada tanggal dan jam tertentu, lalu mati otomatis.
+- **Weekly Repeat**: Pilih hari-hari spesifik dalam seminggu (mis: Su, Mo, We, Fr) jalan rutin tanpa batas.
+- **Specific Date**: Kalender interaktif untuk memilih banyak tanggal spesifik dalam satu tahun (opsi `Once` atau `Repeat` tahunan).
+
+Mendukung eksekusi perintah Power Cycle maupun command Redfish (RACADM CLI) secara otomatis.
+
+---
 
 ## 📁 Project Structure
 
