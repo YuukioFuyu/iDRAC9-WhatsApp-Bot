@@ -300,7 +300,7 @@ class ErinaAI {
         config.erina.temperature,       // temperature (number)
         0.9,                            // top_p (number)
         50,                             // top_k (number)
-        1.2,                            // repetition_penalty (number)
+        1.05,                           // repetition_penalty (number) - Efisiensi generasi bahasa
       ],
     };
 
@@ -328,23 +328,41 @@ class ErinaAI {
 
     logger.debug({ eventId }, 'Erina Gradio event submitted');
 
-    // Step 2: Get result via SSE
-    const resultUrl = `${submitUrl}/${eventId}`;
-    const resultResp = await fetch(resultUrl, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${config.erina.hfToken}`,
-      },
-      signal: AbortSignal.timeout(timeout), // Full timeout for inference
-    });
+    // ── Gradio 5.x+ Heartbeat logic ──
+    // Without periodic heartbeats, Gradio Space Server assumes the client disconnected
+    // and will terminate the LLM inference forcefully, causing SSE to hang indefinitely.
+    let heartbeatInterval;
+    const heartbeatUrl = `${SPACE_URL}/gradio_api/heartbeat/${eventId}`;
 
-    if (!resultResp.ok) {
-      const errText = await resultResp.text();
-      throw new Error(`Gradio result failed (${resultResp.status}): ${errText}`);
+    // Send a heartbeat every 8 seconds
+    heartbeatInterval = setInterval(() => {
+      fetch(heartbeatUrl, { method: 'GET' }).catch((err) => {
+        logger.trace({ err: err.message }, 'Gradio heartbeat non-fatal error');
+      });
+    }, 8000);
+
+    try {
+      // Step 2: Get result via SSE
+      const resultUrl = `${submitUrl}/${eventId}`;
+      const resultResp = await fetch(resultUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${config.erina.hfToken}`,
+        },
+        signal: AbortSignal.timeout(timeout), // Full timeout for inference
+      });
+
+      if (!resultResp.ok) {
+        const errText = await resultResp.text();
+        throw new Error(`Gradio result failed (${resultResp.status}): ${errText}`);
+      }
+
+      // Parse SSE stream
+      return await this.parseSSEResponse(resultResp);
+    } finally {
+      // MUST ALWAYS clear interval regardless of success or failure
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
     }
-
-    // Parse SSE stream
-    return this.parseSSEResponse(resultResp);
   }
 
   /**
@@ -392,51 +410,67 @@ class ErinaAI {
    * Extracts the final "complete" event data.
    */
   async parseSSEResponse(response) {
-    const text = await response.text();
-    const lines = text.split('\n');
-
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
     let lastData = null;
+    let buffer = '';
+    let currentEvent = null;
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      if (line.startsWith('event:')) {
-        const eventType = line.substring(6).trim();
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // keep incomplete line in buffer
 
-        // Look for the data line following this event
-        if (i + 1 < lines.length && lines[i + 1].startsWith('data:')) {
-          const dataLine = lines[i + 1].substring(5).trim();
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
 
-          if (eventType === 'error') {
-            logger.error({ data: dataLine }, 'Erina Gradio returned error event');
-            throw new Error(`Gradio error: ${dataLine}`);
-          }
+          if (line.startsWith('event:')) {
+            currentEvent = line.substring(6).trim();
+          } else if (line.startsWith('data:')) {
+            const dataLine = line.substring(5).trim();
 
-          if (eventType === 'complete') {
-            try {
-              const parsed = JSON.parse(dataLine);
-              // Gradio returns [output_text] in data array
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                lastData = parsed[0];
-              }
-            } catch {
-              lastData = dataLine;
+            if (currentEvent === 'error') {
+              logger.error({ data: dataLine }, 'Erina Gradio returned error event');
+              throw new Error(`Gradio error: ${dataLine}`);
             }
-          }
 
-          // Also capture generating events for progressive output
-          if (eventType === 'generating') {
-            try {
-              const parsed = JSON.parse(dataLine);
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                lastData = parsed[0];
+            if (currentEvent === 'complete') {
+              try {
+                const parsed = JSON.parse(dataLine);
+                // Gradio returns [output_text] in data array
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  lastData = parsed[0];
+                }
+              } catch {
+                lastData = dataLine;
               }
-            } catch {
-              // Ignore parse errors for intermediate events
+              // Immediately exit out of the stream when complete
+              reader.cancel();
+              return String(lastData);
             }
+
+            // Also capture generating events for progressive output
+            if (currentEvent === 'generating') {
+              try {
+                const parsed = JSON.parse(dataLine);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  lastData = parsed[0];
+                }
+              } catch {
+                // Ignore parse errors for intermediate events
+              }
+            }
+            currentEvent = null; // reset event after data
           }
         }
       }
+    } finally {
+      reader.releaseLock();
     }
 
     if (lastData === null) {
