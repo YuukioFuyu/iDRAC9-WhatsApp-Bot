@@ -1,0 +1,333 @@
+{% extends "layout.html" %}
+{% set activePage = "schedule" %}
+
+{% block title %}Schedule{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8 animate-fade-in">
+  <div>
+    <h2 class="text-2xl font-bold tracking-tight text-surface-100">Schedule</h2>
+    <p class="text-sm text-surface-500 mt-1">Manage automated tasks &amp; cron jobs</p>
+  </div>
+  <div class="flex items-center gap-3">
+    <span class="badge badge-info" id="schedule-count-badge">
+      <span class="status-dot status-dot-success"></span>
+      <span id="schedule-count-text">0 Active</span>
+    </span>
+    <button onclick="openModal()" class="btn-primary text-sm" id="btn-add-schedule">
+      <span class="flex items-center gap-2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        Add Schedule
+      </span>
+    </button>
+  </div>
+</div>
+
+<!-- Toolbar: Search + Sort -->
+<div class="glass-card-static p-4 mb-6 animate-slide-up" style="animation-delay: 100ms">
+  <div class="flex flex-col sm:flex-row gap-3">
+    <div class="flex-1 relative">
+      <svg class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-surface-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+      <input type="text" id="search-input" class="input-field pl-10 text-sm" placeholder="Search schedules..." oninput="handleSearch()">
+    </div>
+    <div class="flex items-center gap-2">
+      <select id="sort-select" class="input-field text-sm w-auto" onchange="handleSort()" style="min-width: 140px">
+        <option value="created_at">Sort: Created</option>
+        <option value="name">Sort: Name</option>
+        <option value="type">Sort: Type</option>
+        <option value="schedule_time">Sort: Time</option>
+        <option value="is_enabled">Sort: Status</option>
+      </select>
+      <button id="sort-order-btn" class="p-2.5 rounded-lg bg-surface-800/50 border border-white/5 hover:border-white/10 transition-colors" onclick="toggleSortOrder()" title="Toggle sort order">
+        <svg class="w-4 h-4 text-surface-400" id="sort-order-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Schedule List -->
+<div class="space-y-3 mb-8" id="schedule-list">
+  <div class="glass-card-static p-8 text-center animate-slide-up" style="animation-delay: 200ms">
+    <div class="shimmer h-16 w-full mb-3"></div>
+    <div class="shimmer h-16 w-full mb-3"></div>
+    <div class="shimmer h-16 w-full"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!-- MODAL: Add / Edit Schedule                         -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div id="schedule-modal" class="modal-overlay hidden">
+  <div class="modal-dialog modal-dialog-lg" onclick="event.stopPropagation()">
+    <div class="flex items-center justify-between mb-6">
+      <h3 class="text-lg font-bold text-surface-100" id="modal-title">Add Schedule</h3>
+      <button onclick="closeModal()" class="w-8 h-8 rounded-lg bg-surface-800 hover:bg-surface-700 flex items-center justify-center transition-colors">
+        <svg class="w-4 h-4 text-surface-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <form id="schedule-form" onsubmit="submitSchedule(event)">
+      <input type="hidden" id="edit-id" value="">
+
+      <!-- Name -->
+      <div class="mb-5">
+        <label class="block text-xs font-semibold text-surface-400 uppercase tracking-wider mb-2">Schedule Name</label>
+        <input type="text" id="field-name" class="input-field text-sm" placeholder="e.g., Server shutdown schedule" required>
+      </div>
+
+      <!-- Type Selection -->
+      <div class="mb-5">
+        <label class="block text-xs font-semibold text-surface-400 uppercase tracking-wider mb-2">Type</label>
+        <div class="grid grid-cols-2 gap-3">
+          <button type="button" class="type-card active" id="type-power" onclick="selectType('power')">
+            <div class="flex flex-col items-center gap-2 py-2">
+              <div class="w-10 h-10 rounded-xl bg-orange-500/15 flex items-center justify-center">
+                <svg class="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+              </div>
+              <span class="text-sm font-semibold">Power Schedule</span>
+              <span class="text-[10px] text-surface-500">On / Off Server</span>
+            </div>
+          </button>
+          <button type="button" class="type-card" id="type-redfish" onclick="selectType('redfish')">
+            <div class="flex flex-col items-center gap-2 py-2">
+              <div class="w-10 h-10 rounded-xl bg-cyan-500/15 flex items-center justify-center">
+                <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+              </div>
+              <span class="text-sm font-semibold">Custom Redfish</span>
+              <span class="text-[10px] text-surface-500">CLI Command</span>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Power Action -->
+      <div id="power-action-group" class="mb-5">
+        <label class="block text-xs font-semibold text-surface-400 uppercase tracking-wider mb-2">Power Action</label>
+        <div class="grid grid-cols-2 gap-3">
+          <label class="action-radio active" id="action-on-label">
+            <input type="radio" name="power-action" value="on" checked class="hidden" onchange="selectPowerAction('on')">
+            <div class="flex items-center gap-3 py-2">
+              <div class="w-8 h-8 rounded-lg bg-green-500/15 flex items-center justify-center"><span class="text-lg">⚡</span></div>
+              <span class="text-sm font-semibold text-surface-200">Power On</span>
+            </div>
+          </label>
+          <label class="action-radio" id="action-off-label">
+            <input type="radio" name="power-action" value="off" class="hidden" onchange="selectPowerAction('off')">
+            <div class="flex items-center gap-3 py-2">
+              <div class="w-8 h-8 rounded-lg bg-red-500/15 flex items-center justify-center"><span class="text-lg">🔴</span></div>
+              <span class="text-sm font-semibold text-surface-200">Power Off</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Redfish Command -->
+      <div id="redfish-action-group" class="mb-5 hidden">
+        <label class="block text-xs font-semibold text-surface-400 uppercase tracking-wider mb-2">Redfish CLI Command</label>
+        <textarea id="field-redfish-cmd" class="input-field text-sm font-mono" rows="3" placeholder="e.g., racadm get System.ServerOS.OSName"></textarea>
+      </div>
+
+      <!-- ═══════════════════════════════════════════ -->
+      <!-- SCHEDULE MODE SELECTOR (3 tabs)            -->
+      <!-- ═══════════════════════════════════════════ -->
+      <div class="mb-5">
+        <label class="block text-xs font-semibold text-surface-400 uppercase tracking-wider mb-3">Schedule Mode</label>
+        <div class="grid grid-cols-3 gap-2 mb-4">
+          <button type="button" class="mode-tab active" id="mode-tab-once" onclick="selectMode('once')">
+            <span class="text-base">🔂</span>
+            <span class="text-xs font-semibold">Once Only</span>
+          </button>
+          <button type="button" class="mode-tab" id="mode-tab-weekly" onclick="selectMode('weekly')">
+            <span class="text-base">📅</span>
+            <span class="text-xs font-semibold">Weekly</span>
+          </button>
+          <button type="button" class="mode-tab" id="mode-tab-specific" onclick="selectMode('specific')">
+            <span class="text-base">📋</span>
+            <span class="text-xs font-semibold">Specific Date</span>
+          </button>
+        </div>
+
+        <!-- ── Panel: Once Only ──────────────────── -->
+        <div id="mode-panel-once" class="mode-panel">
+          <div class="flex items-center justify-center gap-3 flex-wrap">
+            <div class="flex items-center gap-1" id="date-input-group">
+              <input type="text" class="time-digit" id="date-d1" maxlength="1" inputmode="numeric" placeholder="D" onfocus="this.select()" oninput="handleDateDigit(this, 'date-d2')" onkeydown="handleDigitKeydown(event, null, 'date-d2')">
+              <input type="text" class="time-digit" id="date-d2" maxlength="1" inputmode="numeric" placeholder="D" onfocus="this.select()" oninput="handleDateDigit(this, 'date-m1')" onkeydown="handleDigitKeydown(event, 'date-d1', 'date-m1')">
+              <span class="time-separator">/</span>
+              <input type="text" class="time-digit" id="date-m1" maxlength="1" inputmode="numeric" placeholder="M" onfocus="this.select()" oninput="handleDateDigit(this, 'date-m2')" onkeydown="handleDigitKeydown(event, 'date-d2', 'date-m2')">
+              <input type="text" class="time-digit" id="date-m2" maxlength="1" inputmode="numeric" placeholder="M" onfocus="this.select()" oninput="handleDateDigit(this, 'date-y1')" onkeydown="handleDigitKeydown(event, 'date-m1', 'date-y1')">
+              <span class="time-separator">/</span>
+              <input type="text" class="time-digit" id="date-y1" maxlength="1" inputmode="numeric" placeholder="Y" onfocus="this.select()" oninput="handleDateDigit(this, 'date-y2')" onkeydown="handleDigitKeydown(event, 'date-m2', 'date-y2')">
+              <input type="text" class="time-digit" id="date-y2" maxlength="1" inputmode="numeric" placeholder="Y" onfocus="this.select()" oninput="handleDateDigit(this, 'date-y3')" onkeydown="handleDigitKeydown(event, 'date-y1', 'date-y3')">
+              <input type="text" class="time-digit" id="date-y3" maxlength="1" inputmode="numeric" placeholder="Y" onfocus="this.select()" oninput="handleDateDigit(this, 'date-y4')" onkeydown="handleDigitKeydown(event, 'date-y2', 'date-y4')">
+              <input type="text" class="time-digit" id="date-y4" maxlength="1" inputmode="numeric" placeholder="Y" onfocus="this.select()" oninput="handleDateDigit(this, 'time-h1')" onkeydown="handleDigitKeydown(event, 'date-y3', 'time-h1')">
+              <button type="button" class="picker-icon-btn" onclick="toggleCalendar()" title="Open calendar" id="btn-calendar">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+              </button>
+            </div>
+            <div class="flex items-center gap-1" id="time-group-once">
+              <input type="text" class="time-digit" id="time-h1" maxlength="1" inputmode="numeric" placeholder="H" onfocus="this.select()" oninput="handleTimeDigit(this, 'time-h2')" onkeydown="handleDigitKeydown(event, 'date-y4', 'time-h2')">
+              <input type="text" class="time-digit" id="time-h2" maxlength="1" inputmode="numeric" placeholder="H" onfocus="this.select()" oninput="handleTimeDigit(this, 'time-m1')" onkeydown="handleDigitKeydown(event, 'time-h1', 'time-m1')">
+              <span class="time-separator">:</span>
+              <input type="text" class="time-digit" id="time-m1" maxlength="1" inputmode="numeric" placeholder="M" onfocus="this.select()" oninput="handleTimeDigit(this, 'time-m2')" onkeydown="handleDigitKeydown(event, 'time-h2', 'time-m2')">
+              <input type="text" class="time-digit" id="time-m2" maxlength="1" inputmode="numeric" placeholder="M" onfocus="this.select()" oninput="handleTimeDigit(this, null)" onkeydown="handleDigitKeydown(event, 'time-m1', null)">
+              <button type="button" class="picker-icon-btn" onclick="toggleTimePicker()" title="Open time picker" id="btn-clock">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              </button>
+            </div>
+          </div>
+          <!-- Calendar popup -->
+          <div id="calendar-popup" class="picker-popup hidden"></div>
+          <!-- Time picker popup -->
+          <div id="time-picker-popup" class="picker-popup hidden"></div>
+        </div>
+
+        <!-- ── Panel: Weekly ─────────────────────── -->
+        <div id="mode-panel-weekly" class="mode-panel hidden">
+          <label class="block text-xs text-surface-500 mb-2 text-center">Select days of the week</label>
+          <div class="flex items-center justify-center gap-2 mb-4" id="day-pills">
+            <button type="button" class="day-pill" data-day="0" onclick="toggleDay(0)">Su</button>
+            <button type="button" class="day-pill" data-day="1" onclick="toggleDay(1)">Mo</button>
+            <button type="button" class="day-pill" data-day="2" onclick="toggleDay(2)">Tu</button>
+            <button type="button" class="day-pill" data-day="3" onclick="toggleDay(3)">We</button>
+            <button type="button" class="day-pill" data-day="4" onclick="toggleDay(4)">Th</button>
+            <button type="button" class="day-pill" data-day="5" onclick="toggleDay(5)">Fr</button>
+            <button type="button" class="day-pill" data-day="6" onclick="toggleDay(6)">Sa</button>
+          </div>
+          <div class="flex items-center justify-center gap-1" id="time-group-weekly">
+            <input type="text" class="time-digit" id="wk-time-h1" maxlength="1" inputmode="numeric" placeholder="H" onfocus="this.select()" oninput="handleTimeDigit(this, 'wk-time-h2')" onkeydown="handleDigitKeydown(event, null, 'wk-time-h2')">
+            <input type="text" class="time-digit" id="wk-time-h2" maxlength="1" inputmode="numeric" placeholder="H" onfocus="this.select()" oninput="handleTimeDigit(this, 'wk-time-m1')" onkeydown="handleDigitKeydown(event, 'wk-time-h1', 'wk-time-m1')">
+            <span class="time-separator">:</span>
+            <input type="text" class="time-digit" id="wk-time-m1" maxlength="1" inputmode="numeric" placeholder="M" onfocus="this.select()" oninput="handleTimeDigit(this, 'wk-time-m2')" onkeydown="handleDigitKeydown(event, 'wk-time-h2', 'wk-time-m2')">
+            <input type="text" class="time-digit" id="wk-time-m2" maxlength="1" inputmode="numeric" placeholder="M" onfocus="this.select()" oninput="handleTimeDigit(this, null)" onkeydown="handleDigitKeydown(event, 'wk-time-m1', null)">
+            <button type="button" class="picker-icon-btn" onclick="toggleTimePicker('wk')" title="Open time picker">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </button>
+          </div>
+          <div id="wk-time-picker-popup" class="picker-popup hidden"></div>
+        </div>
+
+        <!-- ── Panel: Specific Date ──────────────── -->
+        <div id="mode-panel-specific" class="mode-panel hidden">
+          <!-- Sub-mode toggle -->
+          <div class="flex items-center justify-center gap-2 mb-3">
+            <button type="button" class="sub-mode-pill active" id="sub-mode-once" onclick="selectSubMode('once')">Once</button>
+            <button type="button" class="sub-mode-pill" id="sub-mode-repeat" onclick="selectSubMode('repeat')">Repeat</button>
+          </div>
+          <p class="text-[10px] text-surface-500 text-center mb-3" id="sub-mode-hint">Schedule will auto-disable after the last selected date</p>
+
+          <!-- Multi-select calendar -->
+          <div class="picker-popup mb-3" style="margin-top:0">
+            <div class="flex items-center justify-between p-3 border-b border-white/5">
+              <button type="button" class="picker-arrow" onclick="specificCalNav(-1)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+              </button>
+              <span class="text-sm font-semibold text-surface-200" id="specific-cal-label">April 2026</span>
+              <button type="button" class="picker-arrow" onclick="specificCalNav(1)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+              </button>
+            </div>
+            <div class="p-3">
+              <div class="grid grid-cols-7 gap-1 mb-1">
+                <span class="cal-header">Su</span><span class="cal-header">Mo</span><span class="cal-header">Tu</span>
+                <span class="cal-header">We</span><span class="cal-header">Th</span><span class="cal-header">Fr</span><span class="cal-header">Sa</span>
+              </div>
+              <div class="grid grid-cols-7 gap-1" id="specific-cal-grid"></div>
+            </div>
+          </div>
+
+          <!-- Selected dates chips -->
+          <div class="flex flex-wrap gap-1 mb-3 max-h-20 overflow-y-auto" id="selected-dates-chips"></div>
+
+          <!-- Time -->
+          <div class="flex items-center justify-center gap-1">
+            <input type="text" class="time-digit" id="sp-time-h1" maxlength="1" inputmode="numeric" placeholder="H" onfocus="this.select()" oninput="handleTimeDigit(this, 'sp-time-h2')" onkeydown="handleDigitKeydown(event, null, 'sp-time-h2')">
+            <input type="text" class="time-digit" id="sp-time-h2" maxlength="1" inputmode="numeric" placeholder="H" onfocus="this.select()" oninput="handleTimeDigit(this, 'sp-time-m1')" onkeydown="handleDigitKeydown(event, 'sp-time-h1', 'sp-time-m1')">
+            <span class="time-separator">:</span>
+            <input type="text" class="time-digit" id="sp-time-m1" maxlength="1" inputmode="numeric" placeholder="M" onfocus="this.select()" oninput="handleTimeDigit(this, 'sp-time-m2')" onkeydown="handleDigitKeydown(event, 'sp-time-h2', 'sp-time-m2')">
+            <input type="text" class="time-digit" id="sp-time-m2" maxlength="1" inputmode="numeric" placeholder="M" onfocus="this.select()" oninput="handleTimeDigit(this, null)" onkeydown="handleDigitKeydown(event, 'sp-time-m1', null)">
+            <button type="button" class="picker-icon-btn" onclick="toggleTimePicker('sp')" title="Open time picker">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </button>
+          </div>
+          <div id="sp-time-picker-popup" class="picker-popup hidden"></div>
+        </div>
+      </div>
+
+      <!-- Description -->
+      <div class="mb-6">
+        <label class="block text-xs font-semibold text-surface-400 uppercase tracking-wider mb-2">Description <span class="text-surface-600">(optional)</span></label>
+        <textarea id="field-description" class="input-field text-sm" rows="2" placeholder="e.g., Shut down the server every day at 5 p.m."></textarea>
+      </div>
+
+      <!-- Actions -->
+      <div class="flex gap-3">
+        <button type="button" onclick="closeModal()" class="flex-1 py-3 rounded-xl bg-surface-800 hover:bg-surface-700 text-sm font-semibold text-surface-300 transition-colors">Cancel</button>
+        <button type="submit" class="flex-1 btn-primary text-sm py-3" id="btn-submit">Save Schedule</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!-- SHARED TIME PICKER TEMPLATE (cloned by JS)        -->
+<!-- ═══════════════════════════════════════════════════ -->
+<template id="tpl-time-picker">
+  <div class="flex items-center justify-center gap-3 p-4">
+    <div class="picker-wheel-wrap">
+      <label class="text-[10px] text-surface-500 uppercase tracking-wider text-center block mb-1">Hour</label>
+      <div class="picker-wheel">
+        <button type="button" class="picker-arrow" data-action="hour-up">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
+        </button>
+        <div class="picker-value" data-role="hour">00</div>
+        <button type="button" class="picker-arrow" data-action="hour-down">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+      </div>
+    </div>
+    <span class="text-2xl font-bold text-surface-400 mt-4">:</span>
+    <div class="picker-wheel-wrap">
+      <label class="text-[10px] text-surface-500 uppercase tracking-wider text-center block mb-1">Minute</label>
+      <div class="picker-wheel">
+        <button type="button" class="picker-arrow" data-action="min-up">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
+        </button>
+        <div class="picker-value" data-role="minute">00</div>
+        <button type="button" class="picker-arrow" data-action="min-down">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+  <button type="button" data-action="apply" class="w-full py-2.5 text-sm font-semibold text-accent hover:text-white bg-accent/10 hover:bg-accent/20 rounded-b-xl transition-colors">Set Time</button>
+</template>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!-- SHARED CALENDAR TEMPLATE (cloned by JS)           -->
+<!-- ═══════════════════════════════════════════════════ -->
+<template id="tpl-calendar">
+  <div class="flex items-center justify-between p-3 border-b border-white/5">
+    <button type="button" class="picker-arrow" data-action="prev">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+    </button>
+    <span class="text-sm font-semibold text-surface-200" data-role="label">April 2026</span>
+    <button type="button" class="picker-arrow" data-action="next">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+    </button>
+  </div>
+  <div class="p-3">
+    <div class="grid grid-cols-7 gap-1 mb-1">
+      <span class="cal-header">Su</span><span class="cal-header">Mo</span><span class="cal-header">Tu</span>
+      <span class="cal-header">We</span><span class="cal-header">Th</span><span class="cal-header">Fr</span><span class="cal-header">Sa</span>
+    </div>
+    <div class="grid grid-cols-7 gap-1" data-role="grid"></div>
+  </div>
+</template>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="/public/js/schedule.js"></script>
+{% endblock %}

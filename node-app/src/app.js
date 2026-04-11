@@ -15,6 +15,7 @@ import { registerAuth } from './middleware/auth.js';
 import { initDatabase, closeDatabase, seedAdminUser, seedBootstrapServer } from './services/db.js';
 import whatsappService from './services/baileys.js';
 import alertScheduler from './services/scheduler.js';
+import taskScheduler from './services/task-scheduler.js';
 
 // ── Path resolution ────────────────────────────────
 const __filename = fileURLToPath(import.meta.url);
@@ -118,6 +119,9 @@ async function start() {
     // 6. Start Alert Scheduler
     alertScheduler.start();
 
+    // 7. Start Task Scheduler (user-defined schedules)
+    await taskScheduler.start();
+
     logger.info('═'.repeat(60));
     logger.info('🎉 All systems operational!');
     logger.info('═'.repeat(60));
@@ -132,6 +136,7 @@ async function shutdown(signal) {
   logger.info(`${signal} received — shutting down gracefully...`);
 
   alertScheduler.stop();
+  taskScheduler.stop();
 
   try {
     await whatsappService.disconnect();

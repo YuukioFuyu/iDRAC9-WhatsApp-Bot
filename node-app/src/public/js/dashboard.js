@@ -24,7 +24,8 @@ async function fetchAllData() {
     fetchNetwork(),
     fetchMemory(),
     fetchProcessors(),
-    fetchPsu()
+    fetchPsu(),
+    fetchUpcomingSchedules()
   ]);
 }
 
@@ -281,6 +282,64 @@ async function fetchPsu() {
     document.getElementById('psu-info').innerHTML = html || '<p class="text-sm text-surface-500">No data available.</p>';
   } catch (err) {
     console.error('Fetch PSU error', err);
+  }
+}
+
+// ── Fetch Upcoming Schedules ───────────────────────
+async function fetchUpcomingSchedules() {
+  try {
+    const resp = await fetch('/api/schedules/upcoming');
+    const json = await resp.json();
+    const container = document.getElementById('upcoming-schedules');
+    if (!container) return;
+
+    if (!json.success || !json.data || json.data.length === 0) {
+      container.innerHTML = `
+        <div class="flex items-center gap-3 py-2">
+          <span class="text-sm text-surface-500">No active schedules</span>
+          <a href="/schedule" class="text-xs text-accent hover:text-accent-hover transition-colors">+ Add</a>
+        </div>
+      `;
+      return;
+    }
+
+    const html = json.data.map(s => {
+      const typeBadge = s.type === 'power'
+        ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-400 font-semibold">⚡ Power</span>'
+        : '<span class="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-400 font-semibold">🔧 Redfish</span>';
+
+      const actionText = s.type === 'power'
+        ? (s.action === 'on' ? 'Power On' : 'Power Off')
+        : (s.action?.length > 25 ? s.action.substring(0, 25) + '...' : s.action);
+
+      const dateText = s.is_everyday || s.is_everyday === 1
+        ? 'Everyday'
+        : (s.schedule_date || '—');
+
+      return `
+        <div class="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
+          <div class="flex items-center gap-3 min-w-0">
+            ${typeBadge}
+            <div class="min-w-0">
+              <span class="text-sm text-surface-200 font-medium truncate block">${esc(s.name)}</span>
+              <span class="text-[10px] text-surface-500">${esc(actionText)}</span>
+            </div>
+          </div>
+          <div class="flex flex-col items-end shrink-0">
+            <span class="text-xs font-mono text-accent">${s.schedule_time}</span>
+            <span class="text-[10px] text-surface-500">${dateText}</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    container.innerHTML = html;
+  } catch (err) {
+    console.error('Fetch upcoming schedules error:', err);
+    const container = document.getElementById('upcoming-schedules');
+    if (container) {
+      container.innerHTML = '<p class="text-sm text-surface-600">Failed to load schedules</p>';
+    }
   }
 }
 
