@@ -21,6 +21,7 @@
 - 🖥️ **Full iDRAC 9 Redfish** — Monitor & kontrol server Dell via REST API (status, thermal, storage, power, network, memory, PSU, logs)
 - 📱 **WhatsApp Bot** — via Baileys (multi-device), dengan QR / Pairing Code
 - 🌐 **Web Dashboard** — Login, monitoring, kontrol WhatsApp connection
+- ⏳ **Task Scheduler** — Otomatisasi multi-mode (Once, Weekly, Specific Dates) untuk eksekusi server
 - 🔔 **Auto Alert** — Notifikasi otomatis: power change, health degradation, temperature spike, event log baru
 - 🗄️ **Dual Database** — PostgreSQL (primary) + SQLite (fallback)
 - 🔒 **Security** — JWT httpOnly, bcrypt, whitelist, rate limit, Docker network isolation
@@ -41,9 +42,10 @@
 │                   │       │                         │          │       │
 │  ┌──────────┐     │  ┌────▼────────────────────┐    │     ┌────▼────┐  │
 │  │ Erina AI │◄────│  │ Intent Classifier       │    │     │Redfish  │  │
-│  │ HF Space │     │  │ Server Analyzer         │    │     │Client   │  │
-│  │ Llama3.2 │     │  │ Command Parser          │    │     └────┬────┘  │
-│  └──────────┘     │  └─────────────────────────┘    │          │       │
+│  │ HF Space │     │  │ Command Parser          │    │     │Client   │  │
+│  │ Llama3.2 │     │  │ Task Scheduler          │    │     └────┬────┘  │
+│  └──────────┘     │  │ Server Analyzer         │    │          │       │
+│                   │  └─────────────────────────┘    │          │       │
 │                   └─────────────────────────────────┘     ┌────▼────┐  │
 │                                                           │ iDRAC 9 │  │
 │                                                           │ Server  │  │
@@ -244,6 +246,18 @@ Monitoring otomatis via polling scheduler:
 | New Event Log | 📋 | Entry baru di iDRAC SEL |
 
 Konfigurasi: `ALERT_ENABLED`, `ALERT_POLL_INTERVAL`, `ALERT_TEMP_THRESHOLD`
+
+---
+
+## ⏳ Schedule Automation
+
+Sistem otomatisasi server tingkat lanjut (cron-like) terintegrasi pada Dashboard.
+
+- **Once Only**: Jalan sekali pada tanggal dan jam tertentu, lalu mati otomatis.
+- **Weekly Repeat**: Pilih hari-hari spesifik dalam seminggu (mis: Su, Mo, We, Fr) jalan rutin tanpa batas.
+- **Specific Date**: Kalender interaktif untuk memilih banyak tanggal spesifik dalam satu tahun (opsi `Once` atau `Repeat` tahunan).
+
+Mendukung eksekusi perintah Power Cycle maupun command Redfish (RACADM CLI) secara otomatis.
 
 ---
 
