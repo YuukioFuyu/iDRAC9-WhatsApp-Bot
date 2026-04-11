@@ -293,7 +293,7 @@ class WhatsAppService extends EventEmitter {
       return senderLID === clean;
     });
 
-    const userName = pushName || (isOwner ? 'Master' : 'Tamu');
+    const userName = pushName || (isOwner ? 'Master' : 'Guest');
 
     // Rate limit check
     const rateCheck = rateLimiter.check(senderLID);
@@ -313,9 +313,10 @@ class WhatsAppService extends EventEmitter {
 
     try {
       // ── 3. Check for pending power confirmation ──
-      const pendingAction = erinaAI.getPendingAction(senderLID);
+      const actionKey = isOwner ? 'OWNER' : senderLID;
+      const pendingAction = erinaAI.getPendingAction(actionKey);
       if (pendingAction) {
-        await this.handlePowerConfirmation(msg, text, senderLID, userName, isOwner, pendingAction, startTime);
+        await this.handlePowerConfirmation(msg, text, actionKey, userName, isOwner, pendingAction, startTime, senderLID);
         return;
       }
 
@@ -484,8 +485,10 @@ class WhatsAppService extends EventEmitter {
    * Handle destructive power action requests — ask Erina for confirmation prompt.
    */
   async handlePowerAction(text, intent, userName, isOwner, senderLID) {
+    const actionKey = isOwner ? 'OWNER' : senderLID;
+
     // Set pending action FIRST — regardless of Erina availability
-    erinaAI.setPendingAction(senderLID, intent.action, intent.command, intent.args);
+    erinaAI.setPendingAction(actionKey, intent.action, intent.command, intent.args);
 
     if (erinaAI.isAvailable()) {
       // Ask Erina to generate natural confirmation prompt
@@ -498,7 +501,7 @@ class WhatsAppService extends EventEmitter {
       if (erinaResponse) {
         // Refresh pending action timer — countdown starts from when user SEES the confirmation,
         // not from when we started generating it (Erina AI takes ~2 min on CPU)
-        erinaAI.setPendingAction(senderLID, intent.action, intent.command, intent.args);
+        erinaAI.setPendingAction(actionKey, intent.action, intent.command, intent.args);
         return erinaAI.stripMarkers(erinaResponse);
       }
     }
@@ -510,9 +513,9 @@ class WhatsAppService extends EventEmitter {
   /**
    * Handle the user's response to a power confirmation prompt.
    */
-  async handlePowerConfirmation(msg, text, senderLID, userName, isOwner, pending, startTime) {
+  async handlePowerConfirmation(msg, text, actionKey, userName, isOwner, pending, startTime, senderLID) {
     logger.info(
-      { sender: senderLID, pushName: userName, pendingAction: pending.action },
+      { sender: actionKey, pushName: userName, pendingAction: pending.action },
       'Processing power confirmation response'
     );
 
@@ -528,7 +531,7 @@ class WhatsAppService extends EventEmitter {
 
       const decision = erinaAI.parseConfirmation(erinaResponse);
       logger.info(
-        { sender: senderLID, decision, hasResponse: !!erinaResponse },
+        { sender: actionKey, decision, hasResponse: !!erinaResponse },
         'Power confirmation decision'
       );
 
@@ -537,26 +540,26 @@ class WhatsAppService extends EventEmitter {
         try {
           const result = await executeCommand(pending.command, pending.args);
           logger.info(
-            { sender: senderLID, command: pending.command },
+            { sender: actionKey, command: pending.command },
             'Power action EXECUTED'
           );
           const cleanResponse = erinaAI.stripMarkers(erinaResponse);
           response = `${cleanResponse}\n\n${result.fallbackText}`;
         } catch (err) {
           logger.error(
-            { sender: senderLID, command: pending.command, err: err.message },
+            { sender: actionKey, command: pending.command, err: err.message },
             'Power action execution FAILED'
           );
           response = `${erinaAI.stripMarkers(erinaResponse)}\n\n❌ Tapi maaf, Erina gagal mengeksekusi perintahnya: ${err.message}`;
         }
-        erinaAI.clearPendingAction(senderLID);
+        erinaAI.clearPendingAction(actionKey);
       } else if (decision === 'cancelled') {
-        erinaAI.clearPendingAction(senderLID);
+        erinaAI.clearPendingAction(actionKey);
         response = erinaAI.stripMarkers(erinaResponse);
       } else {
         // Erina couldn't determine — ask again
         logger.warn(
-          { sender: senderLID, rawResponse: erinaResponse?.substring(0, 200) },
+          { sender: actionKey, rawResponse: erinaResponse?.substring(0, 200) },
           'Erina could not parse confirmation — asking again'
         );
         response = erinaAI.stripMarkers(erinaResponse) ||
@@ -574,7 +577,7 @@ class WhatsAppService extends EventEmitter {
       } else {
         response = '❌ Perintah dibatalkan.';
       }
-      erinaAI.clearPendingAction(senderLID);
+      erinaAI.clearPendingAction(actionKey);
     }
 
     await this.sendPresence(msg.key.remoteJid, 'paused');
@@ -585,7 +588,7 @@ class WhatsAppService extends EventEmitter {
     this.logCommand(senderLID, `confirm:${pending.action}`, response, 'success', elapsed);
 
     logger.info(
-      { sender: senderLID, pushName: userName, action: `confirm:${pending.action}`, elapsed },
+      { sender: actionKey, pushName: userName, action: `confirm:${pending.action}`, elapsed },
       'Power confirmation processed'
     );
   }
