@@ -8,13 +8,14 @@
  *
  * Features:
  * - Dynamic system prompt (base + server context + mood + user identity)
- * - Selective Firestore memory (skip raw server data dumps)
+ * - RAG memory via PostgreSQL pgvector (semantic retrieval + recent context)
  * - Graceful fallback when Space is sleeping/offline
  * - Response cleaning (model artifacts, repetition)
  */
 
 import config from '../config.js';
 import logger from './logger.js';
+import * as erinaMemory from './erina-memory.js';
 
 const SPACE_URL = `https://${config.erina.hfSpace.replace('/', '-').toLowerCase()}.hf.space`;
 const API_NAME = 'chat';
@@ -170,6 +171,14 @@ class ErinaAI {
 
     const { userName, isOwner, serverAnalysis, pendingAction, confirmAction } = options;
 
+    // 1. RAG: Retrieve relevant memories + recent context
+    let chatHistory = [];
+    try {
+      chatHistory = await erinaMemory.buildChatHistory(message);
+    } catch (err) {
+      logger.warn({ err: err.message }, 'RAG retrieval failed — proceeding without memory');
+    }
+
     // Build dynamic system prompt
     const systemPrompt = this.buildSystemPrompt({
       userName,
@@ -180,8 +189,21 @@ class ErinaAI {
     });
 
     try {
-      const response = await this.submitToGradio(message, [], systemPrompt);
-      return this.cleanResponse(response);
+      const response = await this.submitToGradio(message, chatHistory, systemPrompt);
+      const cleaned = this.cleanResponse(response);
+
+      // 2. Save conversation to PostgreSQL memory (non-blocking)
+      // Role mapping: master (owner) / guest (non-owner) / erina (AI)
+      const senderRole = isOwner ? 'master' : 'guest';
+      const meta = {
+        userName,
+        isOwner,
+        intent: confirmAction || pendingAction || 'chat',
+      };
+      erinaMemory.saveMemory(senderRole, message, meta).catch(() => {});
+      erinaMemory.saveMemory('erina', cleaned, {}).catch(() => {});
+
+      return cleaned;
     } catch (err) {
       logger.error({ err: err.message }, 'Erina AI chat failed');
       return null;
@@ -221,16 +243,16 @@ class ErinaAI {
    */
   async submitToGradio(message, chatHistory = [], systemPrompt = '') {
     try {
-      return await this._doGradioRequest(message, systemPrompt, config.erina.timeout);
+      return await this._doGradioRequest(message, systemPrompt, config.erina.timeout, chatHistory);
     } catch (err) {
       // Retry once with extended timeout (handles cold start / Space wake-up)
       if (err.message?.includes('timeout') || err.message?.includes('aborted')) {
-        logger.warn('Erina Gradio timeout — checking memory cache directly...');
-        
-        // FAST PATH: Polling check memory endpoint to bypass Gradio queue
-        const cached = await this.checkMemoryCache(message);
+        logger.warn('Erina Gradio timeout — checking PostgreSQL dedup cache...');
+
+        // FAST PATH: Check PostgreSQL for already-generated response
+        const cached = await erinaMemory.checkDuplicate(message);
         if (cached) {
-          logger.info('Memory check HIT: the response was already generated');
+          logger.info('PostgreSQL dedup HIT: response already generated');
           return cached;
         }
 
@@ -239,50 +261,16 @@ class ErinaAI {
           { originalTimeout: config.erina.timeout, retryTimeout },
           'Memory cache miss — sending retry to queue...'
         );
-        return await this._doGradioRequest(message, systemPrompt, retryTimeout);
+        return await this._doGradioRequest(message, systemPrompt, retryTimeout, chatHistory);
       }
       throw err;
     }
   }
 
   /**
-   * Internal: Check if a response is already generated in Firestore memory.
-   * This uses the synchronous `/run/` endpoint (queue=False) to bypass the Gradio queue.
-   */
-  async checkMemoryCache(message) {
-    const runUrl = `${SPACE_URL}/gradio_api/run/check_memory`;
-    const headers = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.erina.hfToken}`,
-    };
-    const payload = { data: [message] };
-
-    try {
-      const resp = await fetch(runUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(10000), // Max 10s wait
-      });
-
-      if (!resp.ok) return null;
-      
-      const data = await resp.json();
-      // Gradio /run/ returns { data: ["response_text"] }
-      if (data && data.data && typeof data.data[0] === 'string' && data.data[0].length > 0) {
-        return data.data[0];
-      }
-      return null;
-    } catch (err) {
-      logger.debug({ err: err.message }, 'Failed to check memory cache');
-      return null;
-    }
-  }
-
-  /**
    * Internal: perform the actual Gradio API two-step request.
    */
-  async _doGradioRequest(message, systemPrompt, timeout) {
+  async _doGradioRequest(message, systemPrompt, timeout, chatHistory = []) {
     const submitUrl = `${SPACE_URL}/gradio_api/call/${API_NAME}`;
 
     const headers = {
@@ -290,7 +278,7 @@ class ErinaAI {
       'Authorization': `Bearer ${config.erina.hfToken}`,
     };
 
-    // api_chat() signature: (message, system_prompt, max_new_tokens, temperature, top_p, top_k, repetition_penalty)
+    // api_chat() signature: (message, system_prompt, max_new_tokens, temperature, top_p, top_k, repetition_penalty, chat_history_json)
     // Registered via hidden button.click with api_name="chat"
     const payload = {
       data: [
@@ -300,11 +288,15 @@ class ErinaAI {
         config.erina.temperature,       // temperature (number)
         0.9,                            // top_p (number)
         50,                             // top_k (number)
-        1.05,                           // repetition_penalty (number) - Efisiensi generasi bahasa
+        1.05,                           // repetition_penalty (number)
+        JSON.stringify(chatHistory),     // chat_history_json (str) — RAG memories
       ],
     };
 
-    logger.debug({ url: submitUrl, messageLen: message.length, timeout }, 'Submitting to Erina Gradio API');
+    logger.debug(
+      { url: submitUrl, messageLen: message.length, historyLen: chatHistory.length, timeout },
+      'Submitting to Erina Gradio API'
+    );
 
     // Step 1: Submit request (also serves as Space wake-up trigger)
     const submitResp = await fetch(submitUrl, {
@@ -373,6 +365,7 @@ class ErinaAI {
     if (!this.isAvailable()) return;
 
     try {
+      // Phase 1: Wake the Space (basic ping)
       logger.info('🔥 Warming up Erina HuggingFace Space...');
       const resp = await fetch(`${SPACE_URL}/gradio_api/call/ping`, {
         method: 'POST',
@@ -395,13 +388,62 @@ class ErinaAI {
             signal: AbortSignal.timeout(15000),
           });
         }
-        logger.info('✅ Erina Space is awake and ready!');
+        logger.info('✅ Erina Space is awake!');
       } else {
-        // If ping endpoint doesn't exist, try a generic request to wake the Space
         logger.warn({ status: resp.status }, 'Ping endpoint not available — Space should still be waking up');
+        return;
       }
+
+      // Phase 2: Poll model readiness (queue=False endpoint → instant response)
+      logger.info('⏳ Waiting for Erina model to load...');
+      const maxWait = 600000; // 10 minutes max
+      const pollInterval = 15000; // Check every 15s
+      const startTime = Date.now();
+
+      while (Date.now() - startTime < maxWait) {
+        try {
+          const statusResp = await fetch(`${SPACE_URL}/gradio_api/run/model_status`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${config.erina.hfToken}`,
+            },
+            body: JSON.stringify({ data: [] }),
+            signal: AbortSignal.timeout(10000),
+          });
+
+          if (statusResp.ok) {
+            const statusData = await statusResp.json();
+            // Gradio /run/ returns { data: ["status_string"] }
+            const status = statusData?.data?.[0] || '';
+
+            if (status === 'ready') {
+              const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+              logger.info(`✅ Erina model ready! (waited ${elapsed}s)`);
+              return;
+            }
+
+            if (status.startsWith('error:')) {
+              logger.error({ status }, 'Erina model FAILED to load');
+              return;
+            }
+
+            // Still loading
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+            logger.info({ status, elapsed: `${elapsed}s` }, '⏳ Erina model still loading...');
+          }
+        } catch (pollErr) {
+          // model_status endpoint might not exist yet (old app.py)
+          // Fall through and just wait
+          logger.debug({ err: pollErr.message }, 'Model status poll failed — retrying...');
+        }
+
+        await new Promise((r) => setTimeout(r, pollInterval));
+      }
+
+      logger.warn('⚠️ Erina model did not become ready within 10 minutes — proceeding anyway');
     } catch (err) {
-      logger.warn({ err: err.message }, 'Erina warm-up ping failed (Space may be starting)');
+      logger.warn({ err: err.message }, 'Erina warm-up failed (Space may be starting)');
     }
   }
 
@@ -518,23 +560,6 @@ class ErinaAI {
     cleaned = cleaned.trim();
 
     return cleaned;
-  }
-
-  /**
-   * Determine if this conversation should be saved to Firestore memory.
-   * Skip raw server data dumps — only save natural conversations.
-   */
-  shouldSaveToMemory(message, response, hasServerData) {
-    // Always skip if response is too short (likely a confirmation)
-    if (!response || response.length < 10) return false;
-
-    // If it was a pure command with server data, save a summary instead of full dump
-    if (hasServerData) {
-      return 'summary'; // Signal to save a condensed version
-    }
-
-    // Casual conversations — always save
-    return true;
   }
 
   // ── Pending Action Management ──────────────────────

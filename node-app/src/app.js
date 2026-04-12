@@ -13,6 +13,7 @@ import config from './config.js';
 import logger from './services/logger.js';
 import { registerAuth } from './middleware/auth.js';
 import { initDatabase, closeDatabase, seedAdminUser, seedBootstrapServer } from './services/db.js';
+import * as erinaMemory from './services/erina-memory.js';
 import whatsappService from './services/baileys.js';
 import alertScheduler from './services/scheduler.js';
 import taskScheduler from './services/task-scheduler.js';
@@ -82,7 +83,7 @@ async function start() {
     logger.info('🚀 iDRAC9 WhatsApp Bot starting...');
     logger.info('═'.repeat(60));
 
-    // 1. Initialize Database (PG or SQLite)
+    // 1. Initialize Database (External PG → Internal PG fallback)
     await initDatabase();
 
     // 2. Seed admin user
@@ -101,7 +102,15 @@ async function start() {
     logger.info(`   Dashboard:  http://localhost:${config.app.port}/dashboard`);
     logger.info(`   Python API: ${config.pythonApi.url}`);
 
-    // 5. WhatsApp — auto-reconnect if existing session found
+    // 5. Initialize Erina Memory (pgvector RAG)
+    const memOk = await erinaMemory.init();
+    if (memOk) {
+      logger.info('🧠 Erina RAG Memory: ACTIVE (pgvector + all-MiniLM-L6-v2)');
+    } else {
+      logger.warn('⚠️  Erina RAG Memory: unavailable — stateless mode');
+    }
+
+    // 6. WhatsApp — auto-reconnect if existing session found
     const { existsSync, readdirSync } = await import('fs');
     const sessionDir = config.whatsapp.sessionPath;
     const hasSession = existsSync(sessionDir) &&
@@ -116,10 +125,10 @@ async function start() {
       logger.info('📱 No WhatsApp session — connect via Dashboard → WhatsApp');
     }
 
-    // 6. Start Alert Scheduler
+    // 7. Start Alert Scheduler
     alertScheduler.start();
 
-    // 7. Start Task Scheduler (user-defined schedules)
+    // 8. Start Task Scheduler (user-defined schedules)
     await taskScheduler.start();
 
     logger.info('═'.repeat(60));

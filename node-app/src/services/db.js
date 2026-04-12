@@ -1,118 +1,25 @@
 /**
- * Database Service — Dual database support (PostgreSQL + SQLite fallback).
+ * Database Service — Dual PostgreSQL support (External + Internal fallback).
  *
  * Strategy:
- * 1. If PostgreSQL is configured (PG_HOST + PG_USERNAME), try to connect
- * 2. If PostgreSQL fails (down/auth error/etc.), auto-fallback to SQLite
- * 3. If PostgreSQL is not configured, use SQLite directly
- * 4. SQLite is ALWAYS available as the fallback
+ * 1. If External PostgreSQL is configured (PG_HOST + PG_USERNAME), connect to it
+ * 2. If External fails or not configured, fallback to Internal PostgreSQL (memories-db container)
+ * 3. Internal PostgreSQL uses pgvector/pgvector:pg16 — replaces legacy SQLite fallback
  *
- * Both databases use the same schema and query interface.
+ * Both databases use the same schema and fully support pgvector for Erina RAG memory.
  */
 
-import Database from 'better-sqlite3';
 import pg from 'pg';
-import { mkdirSync, existsSync } from 'fs';
-import { dirname } from 'path';
 import config from '../config.js';
 import logger from './logger.js';
 
 const { Pool } = pg;
 
 // ── Database state ─────────────────────────────────
-let activeDriver = null;  // 'postgres' | 'sqlite'
-let sqliteDb = null;
 let pgPool = null;
+let dbLabel = null; // 'External' | 'Internal (memories-db)'
 
-// ── Schema Definition ──────────────────────────────
-const SCHEMA_SQLITE = `
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS idrac_servers (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    host TEXT NOT NULL,
-    username TEXT NOT NULL,
-    password TEXT NOT NULL,
-    verify_ssl INTEGER DEFAULT 0,
-    firmware_version TEXT DEFAULT '',
-    is_default INTEGER DEFAULT 0,
-    is_active INTEGER DEFAULT 1,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS command_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sender_number TEXT NOT NULL,
-    command TEXT NOT NULL,
-    response TEXT,
-    server_id INTEGER,
-    status TEXT DEFAULT 'success',
-    response_time_ms INTEGER,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (server_id) REFERENCES idrac_servers(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS alert_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    alert_type TEXT NOT NULL,
-    message TEXT NOT NULL,
-    server_id INTEGER,
-    sent_to TEXT,
-    acknowledged INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (server_id) REFERENCES idrac_servers(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS schedules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    type TEXT NOT NULL CHECK(type IN ('power', 'redfish')),
-    action TEXT NOT NULL,
-    schedule_time TEXT NOT NULL,
-    schedule_mode TEXT NOT NULL DEFAULT 'once' CHECK(schedule_mode IN ('once', 'weekly', 'specific')),
-    schedule_date TEXT DEFAULT NULL,
-    specific_repeat INTEGER DEFAULT 0,
-    description TEXT DEFAULT '',
-    is_enabled INTEGER DEFAULT 1,
-    last_run_at DATETIME,
-    last_result TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS schedule_days (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    schedule_id INTEGER NOT NULL,
-    day_of_week INTEGER NOT NULL CHECK(day_of_week BETWEEN 0 AND 6),
-    FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE,
-    UNIQUE(schedule_id, day_of_week)
-  );
-
-  CREATE TABLE IF NOT EXISTS schedule_dates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    schedule_id INTEGER NOT NULL,
-    month INTEGER NOT NULL CHECK(month BETWEEN 1 AND 12),
-    day INTEGER NOT NULL CHECK(day BETWEEN 1 AND 31),
-    FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE,
-    UNIQUE(schedule_id, month, day)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_cmd_logs_created ON command_logs(created_at DESC);
-  CREATE INDEX IF NOT EXISTS idx_cmd_logs_sender ON command_logs(sender_number);
-  CREATE INDEX IF NOT EXISTS idx_alert_logs_created ON alert_logs(created_at DESC);
-  CREATE INDEX IF NOT EXISTS idx_servers_active ON idrac_servers(is_active);
-  CREATE INDEX IF NOT EXISTS idx_schedules_enabled ON schedules(is_enabled);
-  CREATE INDEX IF NOT EXISTS idx_schedule_days_sid ON schedule_days(schedule_id);
-  CREATE INDEX IF NOT EXISTS idx_schedule_dates_sid ON schedule_dates(schedule_id);
-`;
-
+// ── Schema Definition (PostgreSQL) ─────────────────
 const SCHEMA_POSTGRES = `
   CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
@@ -201,127 +108,94 @@ const SCHEMA_POSTGRES = `
 
 // ── Initialize Database ────────────────────────────
 
+/**
+ * Connect to PostgreSQL (External primary, Internal fallback).
+ */
 async function initDatabase() {
-  // Try PostgreSQL first if configured
+  // 1. Try External PostgreSQL first
   if (config.db.postgres.isConfigured) {
     try {
-      await initPostgres();
+      await initPool(config.db.postgres, 'External');
       return;
     } catch (err) {
       logger.warn(
         { err: err.message },
-        '⚠️  PostgreSQL connection failed, falling back to SQLite'
+        '⚠️  External PostgreSQL failed, trying Internal (memories-db)...'
       );
     }
   }
 
-  // Fallback to SQLite (always works)
-  initSQLite();
-}
-
-function initSQLite() {
-  const dbPath = config.db.sqlitePath;
-  const dbDir = dirname(dbPath);
-
-  // Ensure directory exists
-  if (!existsSync(dbDir)) {
-    mkdirSync(dbDir, { recursive: true });
+  // 2. Fallback to Internal PostgreSQL (memories-db container)
+  if (config.db.fallback.isConfigured) {
+    await initPool(config.db.fallback, 'Internal (memories-db)');
+    return;
   }
 
-  sqliteDb = new Database(dbPath);
-  sqliteDb.pragma('journal_mode = WAL');
-  sqliteDb.pragma('foreign_keys = ON');
-
-  // Run schema
-  sqliteDb.exec(SCHEMA_SQLITE);
-
-  activeDriver = 'sqlite';
-  logger.info(`✅ Database: SQLite → ${dbPath}`);
+  throw new Error('No database configured — set PG_HOST or MEM_PG_HOST in .env');
 }
 
-async function initPostgres() {
+/**
+ * Create a connection pool and initialize schema.
+ */
+async function initPool(pgConfig, label) {
   pgPool = new Pool({
-    host: config.db.postgres.host,
-    port: config.db.postgres.port,
-    database: config.db.postgres.database,
-    user: config.db.postgres.username,
-    password: config.db.postgres.password,
+    host: pgConfig.host,
+    port: pgConfig.port,
+    database: pgConfig.database,
+    user: pgConfig.username,
+    password: pgConfig.password,
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
   });
 
-  // Test connection
+  // Test connection + run schema
   const client = await pgPool.connect();
   try {
     await client.query('SELECT 1');
-    // Run schema
     await client.query(SCHEMA_POSTGRES);
-    activeDriver = 'postgres';
+    dbLabel = label;
     logger.info(
-      `✅ Database: PostgreSQL → ${config.db.postgres.host}:${config.db.postgres.port}/${config.db.postgres.database}`
+      `✅ Database: PostgreSQL ${label} → ${pgConfig.host}:${pgConfig.port}/${pgConfig.database}`
     );
   } finally {
     client.release();
   }
 }
 
-// ── Query Interface (unified for both drivers) ─────
+// ── Query Interface ────────────────────────────────
 
 /**
  * Execute a query and return all rows.
- * @param {string} sql - SQL query (use $1, $2 for PG; ? for SQLite)
+ * @param {string} sql - SQL query (use $1, $2 for parameters)
  * @param {Array} params - Query parameters
  * @returns {Array} rows
  */
 async function query(sql, params = []) {
-  if (activeDriver === 'postgres') {
-    const result = await pgPool.query(sql, params);
-    return result.rows;
-  }
-
-  // Convert PG-style $1, $2 to SQLite ? placeholders
-  const sqliteSql = sql.replace(/\$(\d+)/g, '?');
-  const stmt = sqliteDb.prepare(sqliteSql);
-  return stmt.all(...params);
+  const result = await pgPool.query(sql, params);
+  return result.rows;
 }
 
 /**
  * Execute a query and return the first row.
  */
 async function queryOne(sql, params = []) {
-  if (activeDriver === 'postgres') {
-    const result = await pgPool.query(sql, params);
-    return result.rows[0] || null;
-  }
-
-  const sqliteSql = sql.replace(/\$(\d+)/g, '?');
-  const stmt = sqliteDb.prepare(sqliteSql);
-  return stmt.get(...params) || null;
+  const result = await pgPool.query(sql, params);
+  return result.rows[0] || null;
 }
 
 /**
  * Execute an INSERT/UPDATE/DELETE and return result info.
  */
 async function execute(sql, params = []) {
-  if (activeDriver === 'postgres') {
-    let pgSql = sql;
-    if (pgSql.trim().toUpperCase().startsWith('INSERT') && !pgSql.toUpperCase().includes('RETURNING')) {
-      pgSql += ' RETURNING id';
-    }
-    const result = await pgPool.query(pgSql, params);
-    return {
-      changes: result.rowCount,
-      lastInsertRowid: result.rows?.[0]?.id,
-    };
+  let pgSql = sql;
+  if (pgSql.trim().toUpperCase().startsWith('INSERT') && !pgSql.toUpperCase().includes('RETURNING')) {
+    pgSql += ' RETURNING id';
   }
-
-  const sqliteSql = sql.replace(/\$(\d+)/g, '?');
-  const stmt = sqliteDb.prepare(sqliteSql);
-  const result = stmt.run(...params);
+  const result = await pgPool.query(pgSql, params);
   return {
-    changes: result.changes,
-    lastInsertRowid: result.lastInsertRowid,
+    changes: result.rowCount,
+    lastInsertRowid: result.rows?.[0]?.id,
   };
 }
 
@@ -333,17 +207,20 @@ async function closeDatabase() {
     await pgPool.end();
     logger.info('PostgreSQL pool closed');
   }
-  if (sqliteDb) {
-    sqliteDb.close();
-    logger.info('SQLite database closed');
-  }
 }
 
 /**
- * Get the active database driver name.
+ * Get the PostgreSQL pool instance (for direct queries, e.g., pgvector).
  */
-function getActiveDriver() {
-  return activeDriver;
+function getPgPool() {
+  return pgPool;
+}
+
+/**
+ * Get the current database label.
+ */
+function getDbLabel() {
+  return dbLabel;
 }
 
 // ── Seed default admin user ────────────────────────
@@ -397,7 +274,8 @@ export {
   query,
   queryOne,
   execute,
-  getActiveDriver,
+  getPgPool,
+  getDbLabel,
   seedAdminUser,
   seedBootstrapServer,
 };

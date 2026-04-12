@@ -149,10 +149,10 @@ export default async function apiRoutes(fastify) {
 
   // ── GET /api/db-driver — check active DB ─────────
   fastify.get('/api/db-driver', async () => {
-    const { getActiveDriver } = await import('../services/db.js');
+    const { getDbLabel } = await import('../services/db.js');
     return {
       success: true,
-      data: { driver: getActiveDriver() },
+      data: { driver: getDbLabel() },
     };
   });
 

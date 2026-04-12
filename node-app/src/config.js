@@ -52,15 +52,19 @@ const schema = Joi.object({
   WA_COMMAND_PREFIX: Joi.string().allow('', null).default(''),
   WA_RATE_LIMIT: Joi.number().integer().min(1).default(10),
 
-  // Database — SQLite (always available)
-  DB_PATH: Joi.string().default('./data/idrac-bot.db'),
-
-  // Database — PostgreSQL (optional, primary when configured)
+  // Database — PostgreSQL External (primary)
   PG_HOST: Joi.string().allow('', null).default(''),
   PG_PORT: Joi.number().integer().default(5432),
   PG_DATABASE: Joi.string().default('idrac_bot'),
   PG_USERNAME: Joi.string().allow('', null).default(''),
   PG_PASSWORD: Joi.string().allow('', null).default(''),
+
+  // Database — PostgreSQL Internal / memories-db (fallback, pengganti SQLite)
+  MEM_PG_HOST: Joi.string().allow('', null).default('memories-db'),
+  MEM_PG_PORT: Joi.number().integer().default(5432),
+  MEM_PG_DATABASE: Joi.string().default('erina_memories'),
+  MEM_PG_USERNAME: Joi.string().allow('', null).default('erina'),
+  MEM_PG_PASSWORD: Joi.string().allow('', null).default(''),
 
   // Alert System
   ALERT_POLL_INTERVAL: Joi.number().integer().min(10).default(60),
@@ -74,6 +78,10 @@ const schema = Joi.object({
   ERINA_TIMEOUT: Joi.number().integer().min(5000).default(180000),
   ERINA_MAX_TOKENS: Joi.number().integer().min(64).max(2048).default(512),
   ERINA_TEMPERATURE: Joi.number().min(0.1).max(2.0).default(0.7),
+
+  // RAG Memory (pgvector)
+  ERINA_MEMORY_LIMIT: Joi.number().integer().min(1).max(20).default(5),
+  ERINA_RECENT_CONTEXT: Joi.number().integer().min(0).max(10).default(3),
 
 }).unknown(true); // Allow unknown env vars
 
@@ -139,7 +147,6 @@ const config = {
   },
 
   db: {
-    sqlitePath: envVars.DB_PATH,
     postgres: {
       host: envVars.PG_HOST,
       port: envVars.PG_PORT,
@@ -148,6 +155,16 @@ const config = {
       password: envVars.PG_PASSWORD,
       get isConfigured() {
         return !!(envVars.PG_HOST && envVars.PG_USERNAME);
+      },
+    },
+    fallback: {
+      host: envVars.MEM_PG_HOST,
+      port: envVars.MEM_PG_PORT,
+      database: envVars.MEM_PG_DATABASE,
+      username: envVars.MEM_PG_USERNAME,
+      password: envVars.MEM_PG_PASSWORD,
+      get isConfigured() {
+        return !!(envVars.MEM_PG_HOST && envVars.MEM_PG_USERNAME && envVars.MEM_PG_PASSWORD);
       },
     },
   },
@@ -167,6 +184,8 @@ const config = {
     timeout: envVars.ERINA_TIMEOUT,
     maxTokens: envVars.ERINA_MAX_TOKENS,
     temperature: envVars.ERINA_TEMPERATURE,
+    memoryLimit: envVars.ERINA_MEMORY_LIMIT,
+    recentContext: envVars.ERINA_RECENT_CONTEXT,
   },
 
   log: {

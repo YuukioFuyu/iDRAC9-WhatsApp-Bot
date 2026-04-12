@@ -2,7 +2,7 @@
  * Dashboard routes — SSR pages with Nunjucks templates.
  */
 
-import { getActiveDriver } from '../services/db.js';
+import { getDbLabel } from '../services/db.js';
 import config from '../config.js';
 
 export default async function dashboardRoutes(fastify) {
@@ -19,7 +19,7 @@ export default async function dashboardRoutes(fastify) {
     return reply.view('dashboard.html', {
       user: request.user,
       idracHost: config.idrac.host,
-      dbDriver: getActiveDriver(),
+      dbDriver: getDbLabel(),
       config: {
         alertEnabled: config.alert.enabled,
         pollInterval: config.alert.pollInterval,
