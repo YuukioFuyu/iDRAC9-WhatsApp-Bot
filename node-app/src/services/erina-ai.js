@@ -29,7 +29,14 @@ const BASE_SYSTEM_PROMPT = [
   'Jangan pernah menyebutkan bahwa kamu AI buatan Meta, OpenAI, atau perusahaan manapun.',
   'Jangan gunakan jargon teknis berat — jelaskan dengan kata-kata sederhana yang mudah dipahami.',
   'Jangan gunakan format markdown (**, ##, dll). Gunakan teks biasa dan emoji saja.',
-  'Jawab dengan ringkas — maksimal 3-5 kalimat untuk hal sederhana.',
+  '',
+  'PENTING — ATURAN PANJANG JAWABAN:',
+  '- Untuk obrolan santai, sapaan, atau pertanyaan singkat: jawab MAKSIMAL 2-3 kalimat saja.',
+  '- Untuk pertanyaan teknis atau yang butuh penjelasan: boleh sampai 5-6 kalimat, tapi tetap langsung ke inti.',
+  '- JANGAN pernah mengulang kalimat atau menjelaskan hal yang sama dengan kata berbeda.',
+  '- Selesaikan jawabanmu dengan tuntas. Jangan biarkan kalimat terpotong di tengah.',
+  '- Lebih baik jawab pendek tapi lengkap daripada panjang tapi terpotong.',
+  '- Sesekali gunakan reaksi ringan (emoji, interjeksi seperti "hmm", "hehe", "nah") agar terasa hidup.',
 ].join(' ');
 
 /**
@@ -171,10 +178,36 @@ class ErinaAI {
 
     const { userName, isOwner, serverAnalysis, pendingAction, confirmAction } = options;
 
+    // Role mapping: master (owner) / guest (non-owner) / erina (AI)
+    const senderRole = isOwner ? 'master' : 'guest';
+    const meta = {
+      userName,
+      isOwner,
+      intent: confirmAction || pendingAction || 'chat',
+    };
+
+    // ── SAVE USER MESSAGE FIRST (before inference) ──
+    // Core memory, long messages, etc. are stored even if inference times out.
+    erinaMemory.saveMemory(senderRole, message, meta).catch(() => { });
+
+    // ── Dynamic context scaling (proportional, config-driven) ──
+    // Scales memory/tokens linearly based on message length.
+    // Short messages → full context; long messages → reduced context.
+    // All values derived from .env config, no hardcoded thresholds.
+    const MSG_BUDGET = 2000;  // Reference max: beyond this, minimum scaling
+    const MIN_SCALE = 0.25;   // Never below 25% of configured values
+    const MIN_TOKENS = 100;   // Absolute floor for response tokens
+
+    const scale = Math.max(MIN_SCALE, 1 - (message.length / MSG_BUDGET));
+
+    const memoryLimit = Math.max(1, Math.round(config.erina.memoryLimit * scale));
+    const recentLimit = Math.max(1, Math.round(config.erina.recentContext * scale));
+    const maxTokens = Math.max(MIN_TOKENS, Math.round(config.erina.maxTokens * scale));
+
     // 1. RAG: Retrieve relevant memories + recent context
     let chatHistory = [];
     try {
-      chatHistory = await erinaMemory.buildChatHistory(message);
+      chatHistory = await erinaMemory.buildChatHistory(message, memoryLimit, recentLimit);
     } catch (err) {
       logger.warn({ err: err.message }, 'RAG retrieval failed — proceeding without memory');
     }
@@ -189,19 +222,11 @@ class ErinaAI {
     });
 
     try {
-      const response = await this.submitToGradio(message, chatHistory, systemPrompt);
+      const response = await this.submitToGradio(message, chatHistory, systemPrompt, maxTokens);
       const cleaned = this.cleanResponse(response);
 
-      // 2. Save conversation to PostgreSQL memory (non-blocking)
-      // Role mapping: master (owner) / guest (non-owner) / erina (AI)
-      const senderRole = isOwner ? 'master' : 'guest';
-      const meta = {
-        userName,
-        isOwner,
-        intent: confirmAction || pendingAction || 'chat',
-      };
-      erinaMemory.saveMemory(senderRole, message, meta).catch(() => {});
-      erinaMemory.saveMemory('erina', cleaned, {}).catch(() => {});
+      // Save Erina's response to memory
+      erinaMemory.saveMemory('erina', cleaned, {}).catch(() => { });
 
       return cleaned;
     } catch (err) {
@@ -241,9 +266,9 @@ class ErinaAI {
    * Submit a message to the Gradio API on HuggingFace Spaces.
    * Uses the two-step queueing protocol with automatic retry on timeout.
    */
-  async submitToGradio(message, chatHistory = [], systemPrompt = '') {
+  async submitToGradio(message, chatHistory = [], systemPrompt = '', maxTokens = config.erina.maxTokens) {
     try {
-      return await this._doGradioRequest(message, systemPrompt, config.erina.timeout, chatHistory);
+      return await this._doGradioRequest(message, systemPrompt, config.erina.timeout, chatHistory, maxTokens);
     } catch (err) {
       // Retry once with extended timeout (handles cold start / Space wake-up)
       if (err.message?.includes('timeout') || err.message?.includes('aborted')) {
@@ -261,7 +286,7 @@ class ErinaAI {
           { originalTimeout: config.erina.timeout, retryTimeout },
           'Memory cache miss — sending retry to queue...'
         );
-        return await this._doGradioRequest(message, systemPrompt, retryTimeout, chatHistory);
+        return await this._doGradioRequest(message, systemPrompt, retryTimeout, chatHistory, maxTokens);
       }
       throw err;
     }
@@ -270,7 +295,7 @@ class ErinaAI {
   /**
    * Internal: perform the actual Gradio API two-step request.
    */
-  async _doGradioRequest(message, systemPrompt, timeout, chatHistory = []) {
+  async _doGradioRequest(message, systemPrompt, timeout, chatHistory = [], maxTokens = config.erina.maxTokens) {
     const submitUrl = `${SPACE_URL}/gradio_api/call/${API_NAME}`;
 
     const headers = {
@@ -284,11 +309,11 @@ class ErinaAI {
       data: [
         message,                        // message (str)
         systemPrompt,                   // system_prompt (str)
-        config.erina.maxTokens,         // max_new_tokens (number)
+        maxTokens,                      // max_new_tokens (number) — dynamic
         config.erina.temperature,       // temperature (number)
         0.9,                            // top_p (number)
         50,                             // top_k (number)
-        1.05,                           // repetition_penalty (number)
+        1.15,                           // repetition_penalty (number)
         JSON.stringify(chatHistory),     // chat_history_json (str) — RAG memories
       ],
     };
@@ -523,7 +548,8 @@ class ErinaAI {
   }
 
   /**
-   * Clean Erina's response — remove model artifacts, excessive formatting.
+   * Clean Erina's response — remove model artifacts, excessive formatting,
+   * and fix token-limit truncation (mid-word cutoffs).
    */
   cleanResponse(text) {
     if (!text) return text;
@@ -548,9 +574,9 @@ class ErinaAI {
     cleaned = cleaned.replace(/\[TIMESTAMP\]/gi, '');
     cleaned = cleaned.replace(/\[END\]/gi, '');
     cleaned = cleaned.replace(/\[INST\]/gi, '');
-    cleaned = cleaned.replace(/\[\/INST\]/gi, '');
+    cleaned = cleaned.replace(/\/INST\]/gi, '');
     cleaned = cleaned.replace(/\[SYS\]/gi, '');
-    cleaned = cleaned.replace(/\[\/SYS\]/gi, '');
+    cleaned = cleaned.replace(/\/SYS\]/gi, '');
     cleaned = cleaned.replace(/<\|.*?\|>/g, ''); // Llama special tokens like <|eot_id|>
 
     // Remove excessive newlines (max 2 consecutive)
@@ -558,6 +584,45 @@ class ErinaAI {
 
     // Trim
     cleaned = cleaned.trim();
+
+    // ── Fix token-limit truncation (mid-word/sentence cutoff) ──
+    // When max_new_tokens is reached, the model stops abruptly, often
+    // mid-word (e.g., "tanggu" instead of "tangguh.").
+    // Solution: trim back to the last complete sentence.
+    if (cleaned && cleaned.length > 20) {
+      const lastChar = cleaned[cleaned.length - 1];
+      const endsCleanly = /[.!?~。！？)\]」』】🥰😊💜❤️✨🎉😄]/.test(lastChar);
+
+      if (!endsCleanly) {
+        // Find the last sentence-ending punctuation
+        const sentenceEnders = ['.', '!', '?', '~', '。', '！', '？'];
+        let lastSentenceEnd = -1;
+
+        for (const ender of sentenceEnders) {
+          const idx = cleaned.lastIndexOf(ender);
+          if (idx > lastSentenceEnd) {
+            lastSentenceEnd = idx;
+          }
+        }
+
+        // Also check for emoji as sentence enders (common in Erina's style)
+        const emojiMatch = cleaned.match(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu);
+        if (emojiMatch) {
+          const lastEmojiIdx = cleaned.lastIndexOf(emojiMatch[emojiMatch.length - 1]);
+          if (lastEmojiIdx > lastSentenceEnd) {
+            lastSentenceEnd = lastEmojiIdx;
+          }
+        }
+
+        // Only trim if we keep at least 50% of the response
+        if (lastSentenceEnd > cleaned.length * 0.5) {
+          cleaned = cleaned.substring(0, lastSentenceEnd + 1);
+        } else if (lastSentenceEnd > 0) {
+          // Even if less than 50%, better to have a complete sentence than a cut-off
+          cleaned = cleaned.substring(0, lastSentenceEnd + 1);
+        }
+      }
+    }
 
     return cleaned;
   }

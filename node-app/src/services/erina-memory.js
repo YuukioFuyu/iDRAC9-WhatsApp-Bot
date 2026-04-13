@@ -304,16 +304,18 @@ async function checkDuplicate(message) {
  * Note: roles are mapped back to 'user'/'assistant' for Gradio compatibility.
  *
  * @param {string} message - Current user message
+ * @param {number} [memoryLimit] - Max RAG memories to retrieve (default: config)
+ * @param {number} [recentLimit] - Max recent messages to fetch (default: config)
  * @returns {Promise<Array<{role: string, content: string}>>} Chat history for LLM
  */
-async function buildChatHistory(message) {
+async function buildChatHistory(message, memoryLimit, recentLimit) {
   const pool = getPgPool();
   if (!pool || !isInitialized) return [];
 
   try {
     const [relevant, recent] = await Promise.all([
-      retrieveRelevant(message),
-      getRecentContext(),
+      retrieveRelevant(message, memoryLimit ?? config.erina.memoryLimit),
+      getRecentContext(recentLimit ?? config.erina.recentContext),
     ]);
 
     const seen = new Set();
