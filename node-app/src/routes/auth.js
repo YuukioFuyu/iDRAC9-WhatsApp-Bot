@@ -60,12 +60,15 @@ export default async function authRoutes(fastify) {
     logger.info({ username }, 'Login successful');
 
     // Set httpOnly cookie
+    // secure: auto-detect from request protocol (allows HTTP on local/internal network)
+    // sameSite: 'lax' allows the cookie to be sent after the POST→redirect login flow
+    const isSecure = request.protocol === 'https' || request.headers['x-forwarded-proto'] === 'https';
     return reply
       .setCookie('token', token, {
         path: '/',
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
+        secure: isSecure,
+        sameSite: 'lax',
         maxAge: 86400, // 24h in seconds
       })
       .redirect('/dashboard');
