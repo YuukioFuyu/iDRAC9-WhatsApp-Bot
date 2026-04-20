@@ -14,7 +14,8 @@ class AlertScheduler {
     this.cache = {
       lastPowerState: null,
       lastHealth: null,
-      lastLogId: null,
+      knownLogIds: new Set(),   // Track all known SEL entry IDs
+      isFirstPoll: true,        // Skip alert flood on first poll
       lastTemps: {},
     };
     this.job = null;
@@ -71,7 +72,7 @@ class AlertScheduler {
       [system, thermal, latestLogs] = await Promise.all([
         redfishClient.getSystem().then((r) => r.data),
         redfishClient.getThermal().then((r) => r.data),
-        redfishClient.getLatestLogs(3).then((r) => r.data),
+        redfishClient.getLatestLogs(20).then((r) => r.data),
       ]);
     } catch (err) {
       // iDRAC unreachable — don't spam alerts
@@ -138,25 +139,79 @@ class AlertScheduler {
       }
     }
 
-    // ── 4. New SEL Entry ────────────────────────
+    // ── 4. New SEL Entries (Real-time Event Log) ─
     const latestEntries = latestLogs.entries || [];
     if (latestEntries.length > 0) {
-      const latestId = latestEntries[0].id;
-      if (this.cache.lastLogId && latestId !== this.cache.lastLogId) {
-        const entry = latestEntries[0];
-        const icon = entry.severity === 'Critical' ? '🔴' : '📋';
-        await this.sendAlert(
-          'sel',
-          [
-            `${icon} *New Event Log*`,
-            ``,
-            `Severity: ${entry.severity}`,
-            `Message: ${entry.message}`,
-            `Time: ${entry.created}`,
-          ].join('\n')
+      if (this.cache.isFirstPoll) {
+        // First poll — seed known IDs without sending alerts
+        for (const entry of latestEntries) {
+          this.cache.knownLogIds.add(entry.id);
+        }
+        this.cache.isFirstPoll = false;
+        logger.info(
+          `📋 SEL baseline seeded with ${latestEntries.length} entries (IDs: ${[...this.cache.knownLogIds].join(', ')})`
         );
+      } else {
+        // Find all NEW entries (entries with IDs we haven't seen before)
+        const newEntries = latestEntries.filter(
+          (entry) => !this.cache.knownLogIds.has(entry.id)
+        );
+
+        if (newEntries.length > 0) {
+          logger.info(`📋 Detected ${newEntries.length} new SEL entries`);
+
+          // Sort by created time ascending so we send oldest first
+          newEntries.sort(
+            (a, b) => new Date(a.created) - new Date(b.created)
+          );
+
+          // Send alerts for each new entry (cap at 10 to prevent spam)
+          const entriesToSend = newEntries.slice(0, 10);
+          for (const entry of entriesToSend) {
+            const icon = this.getSeverityIcon(entry.severity);
+            const sensorInfo = entry.sensor_type
+              ? `\nSensor: ${entry.sensor_type}`
+              : '';
+            await this.sendAlert(
+              'sel',
+              [
+                `${icon} *New Event Log*`,
+                ``,
+                `Severity: *${entry.severity}*`,
+                `Message: ${entry.message}${sensorInfo}`,
+                `ID: ${entry.message_id}`,
+                `Time: ${entry.created}`,
+              ].join('\n')
+            );
+          }
+
+          // If there are more entries than the cap, send a summary
+          if (newEntries.length > 10) {
+            await this.sendAlert(
+              'sel_overflow',
+              [
+                `📋 *Event Log Overflow*`,
+                ``,
+                `${newEntries.length} event baru terdeteksi.`,
+                `${newEntries.length - 10} event tambahan tidak ditampilkan.`,
+                ``,
+                `Periksa dashboard untuk melihat semua event.`,
+              ].join('\n')
+            );
+          }
+
+          // Add all new IDs to known set
+          for (const entry of newEntries) {
+            this.cache.knownLogIds.add(entry.id);
+          }
+        }
       }
-      this.cache.lastLogId = latestId;
+
+      // Keep known IDs set from growing unboundedly (keep latest 100)
+      if (this.cache.knownLogIds.size > 100) {
+        const allIds = [...this.cache.knownLogIds];
+        this.cache.knownLogIds = new Set(allIds.slice(-100));
+      }
     }
 
     // ── Update cache ────────────────────────────
@@ -166,6 +221,18 @@ class AlertScheduler {
     for (const temp of thermal.temperatures || []) {
       this.cache.lastTemps[temp.name] = temp.reading_celsius;
     }
+  }
+
+  /**
+   * Map SEL severity to a descriptive icon for WhatsApp messages.
+   */
+  getSeverityIcon(severity) {
+    const icons = {
+      Critical: '🔴',
+      Warning: '⚠️',
+      OK: '✅',
+    };
+    return icons[severity] || '📋';
   }
 
   /**

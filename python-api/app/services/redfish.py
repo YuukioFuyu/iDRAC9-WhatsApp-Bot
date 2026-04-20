@@ -397,8 +397,25 @@ class RedfishService:
         }
 
     async def get_sel_latest(self, count: int = 5) -> dict:
-        """Get the latest N SEL entries (for alert diffing)."""
-        return await self.get_sel_entries(limit=count)
+        """Get the latest N SEL entries (for alert diffing). No cache to ensure real-time detection."""
+        uri = f"{self.URI_SEL_ENTRIES}?$top={count}&$orderby=Created desc"
+        data = await self.get(uri, use_cache=False)
+
+        entries = []
+        for entry in data.get("Members", []):
+            entries.append({
+                "id": entry.get("Id", ""),
+                "created": entry.get("Created", ""),
+                "message": entry.get("Message", ""),
+                "severity": entry.get("Severity", entry.get("EntryType", "")),
+                "message_id": entry.get("MessageId", ""),
+                "sensor_type": entry.get("SensorType", ""),
+            })
+
+        return {
+            "count": data.get("Members@odata.count", len(entries)),
+            "entries": entries,
+        }
 
     async def check_reachability(self) -> dict:
         """Quick connectivity check to iDRAC."""
