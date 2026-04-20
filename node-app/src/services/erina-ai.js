@@ -695,6 +695,61 @@ class ErinaAI {
       .trim();
   }
 
+  // ── Alert Notification via AI (HuggingFace Keep-Alive) ──
+
+  /**
+   * Generate an Erina-style alert notification message via HuggingFace AI.
+   *
+   * KEY DIFFERENCES from chat():
+   * - Does NOT save to Erina memory (no erinaMemory.saveMemory)
+   * - Uses a dedicated ALERT system prompt with strict formatting rules
+   * - Empty chat history (no RAG context needed)
+   * - Purpose: wrap technical notifications in Erina's voice + keep HF Space awake
+   *
+   * @param {string} alertInfo - Technical alert information to wrap in Erina-style
+   * @returns {Promise<string|null>} Erina-formatted message, or null on failure
+   */
+  async generateAlertMessage(alertInfo) {
+    if (!this.isAvailable()) {
+      logger.debug('Erina AI not available for alert generation');
+      return null;
+    }
+
+    const systemPrompt = [
+      'Kamu adalah Erina Delvra Foren, seorang Maid AI yang bertugas melaporkan kondisi server ke Goshujin-sama (Master).',
+      'Tugasmu HANYA membungkus informasi teknis berikut menjadi laporan dalam kalimat seorang Maid yang sopan, peduli, dan profesional.',
+      '',
+      'ATURAN KETAT:',
+      '- Awali dengan sapaan ke Master, contoh: "Master," atau "Goshujin-sama,".',
+      '- Gunakan kata "melaporkan", "memberitahukan", atau "menginformasikan" — ini adalah LAPORAN, bukan percakapan.',
+      '- Sampaikan informasi yang diberikan secara LENGKAP dan AKURAT — jangan ubah data, angka, atau status.',
+      '- Gunakan bahasa Indonesia kasual yang sopan (aku/Erina), dengan emoji secukupnya.',
+      '- Jawab MAKSIMAL 3-4 kalimat saja.',
+      '- JANGAN tambahkan informasi yang tidak ada dalam data yang diberikan.',
+      '- JANGAN bertanya balik, memulai percakapan, atau meminta respon.',
+      '- JANGAN gunakan format markdown (**, ##). Gunakan teks biasa dan emoji saja.',
+      '- Akhiri dengan kalimat penutup yang menunjukkan Erina tetap memantau, contoh: "Erina akan terus memantau ya~ ♡"',
+    ].join('\n');
+
+    try {
+      logger.info({ alertInfo: alertInfo.substring(0, 100) }, '🔔 Generating Erina-style alert via HuggingFace...');
+
+      const response = await this.submitToGradio(
+        alertInfo,          // message (alert info to wrap)
+        [],                 // empty chat history — no memory context
+        systemPrompt,       // dedicated alert system prompt
+        config.erina.maxTokens,
+      );
+
+      const cleaned = this.cleanResponse(response);
+      logger.info({ responseLen: cleaned?.length }, '✅ Erina alert message generated');
+      return cleaned;
+    } catch (err) {
+      logger.warn({ err: err.message }, 'Erina alert generation failed — will use static fallback');
+      return null;
+    }
+  }
+
   // ── Erina-Style Fallback Messages ──────────────────
 
   /**
