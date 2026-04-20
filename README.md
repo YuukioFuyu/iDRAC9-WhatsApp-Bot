@@ -24,7 +24,7 @@
 - 📱 **WhatsApp Bot** — via Baileys (multi-device), dengan QR / Pairing Code
 - 🌐 **Web Dashboard** — Login, monitoring, kontrol WhatsApp connection
 - ⏳ **Task Scheduler** — Otomatisasi multi-mode (Once, Weekly, Specific Dates) untuk eksekusi server
-- 🔔 **Auto Alert** — Notifikasi otomatis: power change, health degradation, temperature spike, event log baru
+- 🔔 **Auto Alert** — Notifikasi otomatis bernada Erina AI: power change (via HuggingFace keep-alive), health degradation, temperature spike, event log baru
 - 🗄️ **Dual PostgreSQL** — External PostgreSQL (primary) + Internal PostgreSQL/pgvector (fallback, pengganti SQLite)
 - 🔒 **Security** — JWT httpOnly, bcrypt, whitelist, rate limit, Docker network isolation
 
@@ -82,19 +82,19 @@ Kedua database menggunakan PostgreSQL dan fully support **pgvector** — sehingg
 
 ## 🔄 Flowchart — Message Processing
 
-<img width="5929" height="8192" alt="flowchart" src="https://github.com/user-attachments/assets/3566133c-078f-4665-9ef0-b0a1a0edb8aa" />
+<img width="auto" alt="erina-flowchart" src="https://github.com/user-attachments/assets/9b5be746-7af9-4aba-9ae0-25527aa770a3" />
 
 ---
 
 ## 📊 Data Flow Diagram
 
-<img width="8192" height="1193" alt="dataflow" src="https://github.com/user-attachments/assets/a0826742-814d-4b5f-8fc0-cf83e0d6971f" />
+<img width="auto" alt="erina-dfd" src="https://github.com/user-attachments/assets/120c688a-51e6-464e-af53-8b836c41c6ea" />
 
 ---
 
 ## 🔀 Sequence Diagram — Erina AI RAG Pipeline
 
-<img width="6321" height="8191" alt="sequence" src="https://github.com/user-attachments/assets/3133d85d-12a3-4396-80ab-0122d9152747" />
+<img width="auto" alt="erina-sequence" src="https://github.com/user-attachments/assets/3bde0045-8fbf-40f4-ba7b-bc399d11be4c" />
 
 ---
 
@@ -348,14 +348,32 @@ MEM_PG_PASSWORD=your_password_here
 
 ## 🔔 Alert System
 
-Monitoring otomatis via polling scheduler:
+Monitoring otomatis via polling scheduler. Semua notifikasi dibungkus dalam bahasa Erina AI (Maid-style).
 
-| Alert | Emoji | Trigger |
-|-------|-------|---------|
-| Power State Change | ⚡ | Server on → off atau sebaliknya |
-| Health Degradation | 🚨 | Health OK → Warning/Critical |
-| Temperature Spike | 🌡️ | Suhu sensor melebihi threshold |
-| New Event Log | 📋 | Entry baru di iDRAC SEL |
+| Alert | Emoji | Trigger | Metode |
+|-------|-------|---------|--------|
+| Power State Change | ⚡ | Server on → off atau sebaliknya | **Erina AI (HuggingFace)** → fallback template statis |
+| Health Degradation | 🚨 | Health OK → Warning/Critical | Template statis Erina-style (3 variasi) |
+| Temperature Spike | 🌡️ | Suhu sensor melebihi threshold | Template statis Erina-style (3 variasi) |
+| New Event Log | 📋 | Entry baru di iDRAC SEL | Template statis Erina-style (3 variasi) |
+
+### HuggingFace Space Keep-Alive
+
+Notifikasi **Power State Changed** sengaja di-route melalui Erina AI di HuggingFace Space. Ini memastikan Space mendapat aktivitas reguler dan **tidak auto-sleep** setelah 48 jam inaktivitas (Free Tier limitation). Alert ini menggunakan dedicated system prompt khusus notifikasi — **tidak disimpan ke Erina Memory**.
+
+### Contoh Notifikasi
+
+> ⚡ Master, Erina melaporkan perubahan status server!
+>
+> Off → ✅ On
+>
+> Server sudah menyala dan siap beroperasi~ Erina akan terus memantau ya, Master ♡
+
+> 🌡️ Goshujin-sama, saya menginformasikan ada peringatan suhu!
+>
+> Sensor: Inlet Temp — Suhu saat ini: 🔴 78°C (batas: 75°C)
+>
+> Mohon periksa sistem pendinginnya ya~ Erina akan terus memantau ♡
 
 Konfigurasi: `ALERT_ENABLED`, `ALERT_POLL_INTERVAL`, `ALERT_TEMP_THRESHOLD`
 
@@ -529,6 +547,14 @@ Lihat [`.env.example`](.env.example) untuk daftar lengkap. Variabel kunci:
 ---
 
 ## 📝 Changelog
+
+### v1.3.0 — Erina-Style Alert Notifications + HuggingFace Keep-Alive
+
+- **🔔 Erina-Style Alerts** — Semua notifikasi (power, health, temp, SEL) dibungkus dalam bahasa Erina AI (Maid-style) dengan variasi random
+- **🤗 HF Keep-Alive** — Notifikasi Power State Changed di-route melalui Erina AI di HuggingFace untuk mencegah Space auto-sleep (48h inactivity)
+- **🧠 No Memory Pollution** — Alert notifications tidak disimpan ke Erina Memory (bypass `saveMemory`)
+- **📋 Dedicated System Prompt** — System prompt khusus untuk notifikasi dengan aturan ketat agar Llama3 tidak memberikan respon abstrak
+- **🔄 Static Fallback** — Template statis Erina-style (3 variasi per tipe) sebagai fallback jika AI timeout
 
 ### v1.2.0 — SQLite → Internal PostgreSQL Migration
 
