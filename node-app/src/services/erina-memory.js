@@ -77,71 +77,28 @@ async function init() {
   isInitializing = true;
 
   try {
-    // ── Probe ONNX Runtime CPU compatibility ──────────
-    // onnxruntime-node uses native CPU instructions (AVX/SSE4) that may not
-    // be available on all architectures (e.g., MikroTik ARM routers).
-    // SIGILL (Illegal Instruction) kills the process — try/catch can't catch it.
-    // Solution: test in an isolated child process first.
-    logger.info('🔍 Probing ONNX Runtime CPU compatibility...');
-    const { spawnSync } = await import('node:child_process');
-    const { dirname } = await import('node:path');
-    const { fileURLToPath } = await import('node:url');
-
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const nodeAppDir = dirname(__dirname); // node-app/ directory
-
-    const probe = spawnSync(process.execPath, [
-      '--input-type=module',
-      '-e',
-      'import"onnxruntime-node";process.exit(0);',
-    ], {
-      timeout: 15000,
-      stdio: 'ignore',
-      cwd: nodeAppDir,
-    });
-
-    let useWasm = false;
-
-    if (probe.status !== 0 || probe.signal) {
-      const reason = probe.signal
-        ? `terminated by ${probe.signal} (CPU instruction not supported)`
-        : `exited with code ${probe.status}`;
-      logger.warn(`⚠️  ONNX native probe failed: ${reason}`);
-      logger.info('🔄 Falling back to WASM backend (slower but universally compatible)...');
-      useWasm = true;
-    } else {
-      logger.info('✅ ONNX Runtime native probe passed');
-    }
-
     // ── Load embedding model ─────────────────────────
-    logger.info(`🧠 Loading embedding model: ${MODEL_NAME}${useWasm ? ' (WASM)' : ' (native)'}...`);
+    // onnxruntime-node is removed in Dockerfile (causes SIGILL on ARM64).
+    // @huggingface/transformers auto-detects onnxruntime-web (WASM) as fallback.
+    logger.info(`🧠 Loading embedding model: ${MODEL_NAME}...`);
     const startTime = Date.now();
 
     const { pipeline: createPipeline, env: transformersEnv } = await import('@huggingface/transformers');
 
     const cacheDir = process.env.TRANSFORMERS_CACHE || './data/models';
 
-    // Pipeline options — use WASM device when native ONNX is unsupported
-    const pipelineOpts = {
-      cache_dir: cacheDir,
-      quantized: true,
-    };
-
-    if (useWasm) {
-      // Force WASM backend — bypasses onnxruntime-node entirely
-      pipelineOpts.device = 'wasm';
-
-      // Limit WASM threads for resource-constrained MikroTik
-      if (transformersEnv?.backends?.onnx?.wasm) {
-        transformersEnv.backends.onnx.wasm.numThreads = 1;
-      }
+    // Limit WASM threads for resource-constrained environments (MikroTik)
+    if (transformersEnv?.backends?.onnx?.wasm) {
+      transformersEnv.backends.onnx.wasm.numThreads = 1;
     }
 
-    extractor = await createPipeline('feature-extraction', MODEL_NAME, pipelineOpts);
+    extractor = await createPipeline('feature-extraction', MODEL_NAME, {
+      cache_dir: cacheDir,
+      quantized: true,
+    });
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    const backend = useWasm ? 'WASM' : 'native';
-    logger.info(`✅ Embedding model loaded in ${elapsed}s (${MODEL_NAME}, ${EMBEDDING_DIM}-dim, ${backend})`);
+    logger.info(`✅ Embedding model loaded in ${elapsed}s (${MODEL_NAME}, ${EMBEDDING_DIM}-dim)`);
 
     isInitialized = true;
     return true;

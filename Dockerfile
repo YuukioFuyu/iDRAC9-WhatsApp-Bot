@@ -83,7 +83,10 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # ── 4. Install Node.js dependencies ───────────────
 COPY node-app/package.json node-app/package-lock.json /opt/erina-delvra-foren/node-app/
 WORKDIR /opt/erina-delvra-foren/node-app
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev && npm cache clean --force \
+    # Remove onnxruntime-node — causes SIGILL on ARM64 (no AVX/SSE4).
+    # @huggingface/transformers will auto-fallback to onnxruntime-web (WASM).
+    && rm -rf node_modules/onnxruntime-node
 
 # ── 5. Copy application source code ───────────────
 COPY python-api/app/ /opt/erina-delvra-foren/python-api/app/
