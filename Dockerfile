@@ -87,7 +87,10 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 COPY node-app/package.json node-app/package-lock.json /opt/erina-delvra-foren/node-app/
 WORKDIR /opt/erina-delvra-foren/node-app
 RUN npm ci --omit=dev && npm cache clean --force \
-    && rm -rf node_modules/onnxruntime-node
+    && rm -rf node_modules/onnxruntime-node \
+    && sed -i 's/onnxruntime-node/onnxruntime-web/g' node_modules/@xenova/transformers/src/backends/onnx.js \
+    && sed -i 's/onnxruntime-node/onnxruntime-web/g' node_modules/@xenova/transformers/dist/transformers.js \
+    && sed -i 's/onnxruntime-node/onnxruntime-web/g' node_modules/@xenova/transformers/dist/transformers.min.js
 
 # ── 5. Copy application source code ───────────────
 COPY python-api/app/ /opt/erina-delvra-foren/python-api/app/
