@@ -80,27 +80,32 @@ async function init() {
 
   try {
     // ── Load embedding model ─────────────────────────
-    // onnxruntime-node is removed in Dockerfile (causes SIGILL on ARM64).
-    // @huggingface/transformers auto-detects onnxruntime-web (WASM) as fallback.
+    // Using @xenova/transformers v2 — has built-in ONNX WASM runtime
+    // that works on ALL architectures (x86, ARM64, MIPS).
+    // No separate onnxruntime-node/web packages needed.
     logger.info(`🔧 [Memory Init] Step 2: Loading embedding model: ${MODEL_NAME}...`);
     const startTime = Date.now();
 
-    logger.info('   → Importing @huggingface/transformers...');
-    const { pipeline: createPipeline, env: transformersEnv } = await import('@huggingface/transformers');
+    logger.info('   → Importing @xenova/transformers...');
+    const { pipeline: createPipeline, env: xenovaEnv } = await import('@xenova/transformers');
     logger.info('   → Import OK');
 
     const cacheDir = process.env.TRANSFORMERS_CACHE || './data/models';
     logger.info(`   → Cache dir: ${cacheDir}`);
 
-    // Limit WASM threads for resource-constrained environments (MikroTik)
-    if (transformersEnv?.backends?.onnx?.wasm) {
-      transformersEnv.backends.onnx.wasm.numThreads = 1;
+    // Configure Xenova environment
+    xenovaEnv.cacheDir = cacheDir;
+    xenovaEnv.allowLocalModels = true;
+    xenovaEnv.allowRemoteModels = true;
+
+    // Limit ONNX threads for resource-constrained environments (MikroTik)
+    if (xenovaEnv.backends?.onnx?.wasm) {
+      xenovaEnv.backends.onnx.wasm.numThreads = 1;
       logger.info('   → WASM threads limited to 1');
     }
 
     logger.info('   → Creating pipeline (this may download the model on first run)...');
     extractor = await createPipeline('feature-extraction', MODEL_NAME, {
-      cache_dir: cacheDir,
       quantized: true,
     });
 

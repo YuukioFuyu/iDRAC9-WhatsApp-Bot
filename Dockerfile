@@ -81,13 +81,13 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     -r /opt/erina-delvra-foren/python-api/requirements.txt
 
 # ── 4. Install Node.js dependencies ───────────────
-# onnxruntime-node is overridden to onnxruntime-web in package.json (overrides).
-# Belt-and-suspenders: also remove any leftover native binaries after install.
+# @xenova/transformers has built-in ONNX WASM runtime but also
+# optionally installs onnxruntime-node (causes SIGILL on ARM64).
+# Remove it so xenova falls back to its own onnxruntime-web (WASM).
 COPY node-app/package.json node-app/package-lock.json /opt/erina-delvra-foren/node-app/
 WORKDIR /opt/erina-delvra-foren/node-app
 RUN npm ci --omit=dev && npm cache clean --force \
-    && rm -rf node_modules/onnxruntime-node \
-    && ln -s onnxruntime-web node_modules/onnxruntime-node
+    && rm -rf node_modules/onnxruntime-node
 
 # ── 5. Copy application source code ───────────────
 COPY python-api/app/ /opt/erina-delvra-foren/python-api/app/
