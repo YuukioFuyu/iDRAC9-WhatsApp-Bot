@@ -186,10 +186,6 @@ class ErinaAI {
       intent: confirmAction || pendingAction || 'chat',
     };
 
-    // ── SAVE USER MESSAGE FIRST (before inference) ──
-    // Core memory, long messages, etc. are stored even if inference times out.
-    erinaMemory.saveMemory(senderRole, message, meta).catch(() => { });
-
     // ── Dynamic context scaling (proportional, config-driven) ──
     // Scales memory/tokens linearly based on message length.
     // Short messages → full context; long messages → reduced context.
@@ -202,14 +198,39 @@ class ErinaAI {
 
     const memoryLimit = Math.max(1, Math.round(config.erina.memoryLimit * scale));
     const recentLimit = Math.max(1, Math.round(config.erina.recentContext * scale));
-    const maxTokens = Math.max(MIN_TOKENS, Math.round(config.erina.maxTokens * scale));
+    let maxTokens = Math.max(MIN_TOKENS, Math.round(config.erina.maxTokens * scale));
 
-    // 1. RAG: Retrieve relevant memories + recent context
+    // ── Chat-type token optimization ──
+    // Casual chat doesn't need 512 tokens — Erina's rules say 2-3 sentences max.
+    // Server/power queries keep full tokens for technical detail.
+    const isLightChat = !serverAnalysis && !pendingAction && !confirmAction;
+    if (isLightChat && maxTokens > 400) {
+      maxTokens = 400;
+    }
+
+    // ── RAG Memory Retrieval ──
+    // Very short messages (< 12 chars, e.g. "halo", "hey", "pagi") skip RAG
+    // to avoid unnecessary embedText + pgvector overhead (~5-10s saved).
     let chatHistory = [];
-    try {
-      chatHistory = await erinaMemory.buildChatHistory(message, memoryLimit, recentLimit);
-    } catch (err) {
-      logger.warn({ err: err.message }, 'RAG retrieval failed — proceeding without memory');
+    const isSimpleGreeting = message.length < 12 && isLightChat;
+
+    if (isSimpleGreeting) {
+      // Save memory but skip RAG retrieval for tiny greetings
+      erinaMemory.saveMemory(senderRole, message, meta).catch(() => { });
+    } else {
+      // ── SAVE USER MESSAGE + BUILD HISTORY IN PARALLEL ──
+      // Both call embedText() internally — running in parallel saves ~3-5s
+      // vs the old sequential approach (save → then build).
+      // Core memory is still stored even if inference times out.
+      try {
+        const [, history] = await Promise.all([
+          erinaMemory.saveMemory(senderRole, message, meta).catch(() => { }),
+          erinaMemory.buildChatHistory(message, memoryLimit, recentLimit),
+        ]);
+        chatHistory = history;
+      } catch (err) {
+        logger.warn({ err: err.message }, 'RAG retrieval failed — proceeding without memory');
+      }
     }
 
     // Build dynamic system prompt
@@ -723,6 +744,7 @@ class ErinaAI {
       '- Awali dengan sapaan ke Master, contoh: "Master," atau "Goshujin-sama,".',
       '- Gunakan kata "melaporkan", "memberitahukan", atau "menginformasikan" — ini adalah LAPORAN, bukan percakapan.',
       '- Sampaikan informasi yang diberikan secara LENGKAP dan AKURAT — jangan ubah data, angka, atau status.',
+      '- Gunakan kalimat langsung, contoh: "Server telah dinyalakan" atau "Server telah dimatikan". JANGAN gunakan kalimat berbelit seperti "power state berubah dari X ke Y".',
       '- Gunakan bahasa Indonesia kasual yang sopan (aku/Erina), dengan emoji secukupnya.',
       '- Jawab MAKSIMAL 3-4 kalimat saja.',
       '- JANGAN tambahkan informasi yang tidak ada dalam data yang diberikan.',
