@@ -1,0 +1,16 @@
+# Auto detect text files and normalize line endings
+* text=auto
+
+# Shell scripts must use LF (Linux containers)
+*.sh text eol=lf
+entrypoint.sh text eol=lf
+
+# Docker/config files should use LF
+Dockerfile text eol=lf
+supervisord.conf text eol=lf
+docker-compose.yml text eol=lf
+
+# Keep Windows line endings for Windows-specific files
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

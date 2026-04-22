@@ -32,7 +32,7 @@ const schema = Joi.object({
   ADMIN_PASSWORD: Joi.string().min(4).required(),
 
   // Python API
-  PY_API_URL: Joi.string().uri().default('http://python-api:8000'),
+  PY_API_URL: Joi.string().uri().default('http://127.0.0.1:8000'),
 
   // iDRAC (bootstrap — also passed to Python, but Node reads for display)
   IDRAC_HOST: Joi.string().default('https://192.168.1.100'),
@@ -47,7 +47,7 @@ const schema = Joi.object({
   REDIS_PREFIX: Joi.string().allow('', null).default('idrac:'),
 
   // WhatsApp
-  WA_SESSION_PATH: Joi.string().default('./sessions'),
+  WA_SESSION_PATH: Joi.string().default('/data/sessions'),
   WA_ALLOWED_NUMBERS: Joi.string().allow('', null).default(''),
   WA_COMMAND_PREFIX: Joi.string().allow('', null).default(''),
   WA_RATE_LIMIT: Joi.number().integer().min(1).default(10),
@@ -60,7 +60,7 @@ const schema = Joi.object({
   PG_PASSWORD: Joi.string().allow('', null).default(''),
 
   // Database — PostgreSQL Internal / memories-db (fallback, pengganti SQLite)
-  MEM_PG_HOST: Joi.string().allow('', null).default('memories-db'),
+  MEM_PG_HOST: Joi.string().allow('', null).default('127.0.0.1'),
   MEM_PG_PORT: Joi.number().integer().default(5432),
   MEM_PG_DATABASE: Joi.string().default('erina_memories'),
   MEM_PG_USERNAME: Joi.string().allow('', null).default('erina'),

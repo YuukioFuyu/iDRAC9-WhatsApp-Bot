@@ -1,131 +1,31 @@
+# ═══════════════════════════════════════════════════════
+# iDRAC9 WhatsApp Bot — MikroTik Container Edition
+# ═══════════════════════════════════════════════════════
+# Simplified compose for LOCAL TESTING only.
+# On MikroTik, use: /container/add remote-image=...
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f
+
 version: '3.9'
 
 services:
-  # ─────────────────────────────────────
-  # Node.js — WhatsApp Bot + Web Dashboard
-  # ─────────────────────────────────────
-  node-app:
+  erina:
     build:
-      context: ./node-app
+      context: .
       dockerfile: Dockerfile
-    container_name: idrac-bot-node
+    container_name: erina-mikrotik
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "${APP_PORT:-3000}:3000"       # Web Dashboard + WhatsApp Bot
+      - "5432:5432"                     # PostgreSQL (backup/restore access)
     env_file:
       - .env
     environment:
       - TZ=${TZ:-Asia/Jakarta}
     volumes:
-      - ./sessions:/app/sessions
-      - ./data:/app/data
-    depends_on:
-      python-api:
-        condition: service_healthy
-    networks:
-      - idrac-net
-
-  # ─────────────────────────────────────
-  # Python FastAPI — Redfish Bridge
-  # ─────────────────────────────────────
-  python-api:
-    build:
-      context: ./python-api
-      dockerfile: Dockerfile
-    container_name: idrac-bot-python
-    restart: unless-stopped
-    ports:
-      - "${PY_API_PORT:-8000}:8000"
-    env_file:
-      - .env
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    networks:
-      - idrac-net
-
-  # ─────────────────────────────────────
-  # Internal PostgreSQL + pgvector (pengganti SQLite)
-  # Selalu berjalan sebagai standby fallback.
-  # Jika External PG dikonfigurasi, container ini idle (tidak menyimpan data).
-  # ─────────────────────────────────────
-  memories-db:
-    image: pgvector/pgvector:pg16
-    container_name: erina-memories-db
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${MEM_PG_DATABASE:-erina_memories}
-      POSTGRES_USER: ${MEM_PG_USERNAME:-erina}
-      POSTGRES_PASSWORD: ${MEM_PG_PASSWORD:-dellemcr640}
-    volumes:
-      - memories-data:/var/lib/postgresql/data
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER}" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    networks:
-      - idrac-net
-
-  # ─────────────────────────────────────
-  # Redis (optional — use --profile with-redis)
-  # ─────────────────────────────────────
-  redis:
-    image: redis:7-alpine
-    container_name: idrac-bot-redis
-    restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    command: >
-      sh -c '
-        ARGS=""
-        if [ -n "$$REDIS_PASSWORD" ] && [ -n "$$REDIS_USERNAME" ]; then
-          ARGS="--requirepass $$REDIS_PASSWORD --user $$REDIS_USERNAME on \>$$REDIS_PASSWORD ~* &* +@all --user default off nopass nocommands"
-        elif [ -n "$$REDIS_PASSWORD" ]; then
-          ARGS="--requirepass $$REDIS_PASSWORD"
-        fi
-        redis-server $$ARGS
-      '
-    environment:
-      - REDIS_USERNAME=${REDIS_USERNAME:-}
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-    volumes:
-      - redis-data:/data
-    networks:
-      - idrac-net
-    profiles:
-      - with-redis
-
-  # ─────────────────────────────────────
-  # PostgreSQL External (optional — use --profile with-postgres)
-  # ─────────────────────────────────────
-  postgres:
-    image: postgres:16-alpine
-    container_name: idrac-bot-postgres
-    restart: unless-stopped
-    ports:
-      - "${PG_PORT:-5432}:5432"
-    environment:
-      POSTGRES_DB: ${PG_DATABASE:-idrac_bot}
-      POSTGRES_USER: ${PG_USERNAME:-idrac}
-      POSTGRES_PASSWORD: ${PG_PASSWORD:-idrac_secret}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    networks:
-      - idrac-net
-    profiles:
-      - with-postgres
+      - erina-data:/data               # PostgreSQL + Models + Sessions
 
 volumes:
-  redis-data:
-  postgres-data:
-  memories-data:
-
-
-networks:
-  idrac-net:
-    driver: bridge
+  erina-data:

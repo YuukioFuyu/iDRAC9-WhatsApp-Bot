@@ -216,12 +216,9 @@ class AlertScheduler {
     // Try Erina AI first (keeps HuggingFace Space awake)
     if (erinaAI.isAvailable()) {
       const alertInfo = [
-        `Power state server telah berubah.`,
-        `Status sebelumnya: ${oldState}`,
-        `Status sekarang: ${newState}`,
         newState === 'On'
-          ? `Server sekarang dalam kondisi menyala dan beroperasi.`
-          : `Server sekarang dalam kondisi mati / tidak beroperasi.`,
+          ? `Server telah dinyalakan dan sekarang beroperasi.`
+          : `Server telah dimatikan dan sekarang tidak beroperasi.`,
       ].join('\n');
 
       logger.info(
@@ -270,32 +267,26 @@ class AlertScheduler {
   getAlertTemplates(type, data) {
     switch (type) {
       case 'power_change': {
-        const { oldState, newState, icon } = data;
+        const { icon } = data;
         return [
           [
-            `⚡ Master, Erina melaporkan perubahan status server!`,
+            `${icon} Master, Erina melaporkan server telah ${data.newState === 'On' ? 'dinyalakan' : 'dimatikan'}!`,
             ``,
-            `${oldState} → ${icon} ${newState}`,
-            ``,
-            newState === 'On'
+            data.newState === 'On'
               ? `Server sudah menyala dan siap beroperasi~ Erina akan terus memantau ya, Master ♡`
-              : `Server sudah dimatikan. Erina tetap standby kalau Master butuh sesuatu~ ♡`,
+              : `Server sudah mati sekarang. Erina tetap standby kalau Master butuh sesuatu~ ♡`,
           ].join('\n'),
           [
-            `⚡ Goshujin-sama, ada perubahan power state pada server!`,
+            `${icon} Goshujin-sama, server telah ${data.newState === 'On' ? 'dinyalakan' : 'dimatikan'}!`,
             ``,
-            `Status berubah dari ${oldState} ke ${icon} ${newState}.`,
-            ``,
-            newState === 'On'
+            data.newState === 'On'
               ? `Servernya sudah hidup kembali~ Erina akan terus memantau kondisinya ya ♡`
               : `Server sekarang dalam kondisi mati. Erina akan tetap siaga, Master~ ♡`,
           ].join('\n'),
           [
-            `⚡ Master, saya memberitahukan bahwa power state server berubah.`,
+            `${icon} Master, saya memberitahukan bahwa server telah ${data.newState === 'On' ? 'dinyalakan' : 'dimatikan'}.`,
             ``,
-            `${oldState} → ${icon} ${newState}`,
-            ``,
-            newState === 'On'
+            data.newState === 'On'
               ? `Alhamdulillah servernya sudah nyala~ Erina akan jaga terus ya, Master ♡`
               : `Servernya sudah mati sekarang. Kalau butuh apa-apa, Erina selalu siap~ ♡`,
           ].join('\n'),
