@@ -77,6 +77,44 @@ async function init() {
   isInitializing = true;
 
   try {
+    // ── Probe ONNX Runtime CPU compatibility ──────────
+    // onnxruntime-node uses native CPU instructions (AVX/SSE4) that may not
+    // be available on all architectures (e.g., MikroTik ARM routers).
+    // SIGILL (Illegal Instruction) kills the process — try/catch can't catch it.
+    // Solution: test in an isolated child process first.
+    logger.info('🔍 Probing ONNX Runtime CPU compatibility...');
+    const { spawnSync } = await import('node:child_process');
+    const { dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const nodeAppDir = dirname(__dirname); // node-app/ directory
+
+    const probe = spawnSync(process.execPath, [
+      '--input-type=module',
+      '-e',
+      'import"onnxruntime-node";process.exit(0);',
+    ], {
+      timeout: 15000,
+      stdio: 'ignore',
+      cwd: nodeAppDir,
+    });
+
+    if (probe.status !== 0 || probe.signal) {
+      const reason = probe.signal
+        ? `terminated by ${probe.signal} (CPU instruction not supported)`
+        : `exited with code ${probe.status}`;
+      logger.warn(
+        `⚠️  ONNX Runtime probe failed: ${reason} — Erina Memory disabled (stateless mode)`
+      );
+      logger.warn('   This is normal on ARM/MikroTik CPUs without AVX/SSE4 support.');
+      isInitialized = false;
+      return false;
+    }
+
+    logger.info('✅ ONNX Runtime probe passed — loading embedding model...');
+
+    // ── Load embedding model ─────────────────────────
     logger.info(`🧠 Loading embedding model: ${MODEL_NAME}...`);
     const startTime = Date.now();
 
