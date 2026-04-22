@@ -100,35 +100,48 @@ async function init() {
       cwd: nodeAppDir,
     });
 
+    let useWasm = false;
+
     if (probe.status !== 0 || probe.signal) {
       const reason = probe.signal
         ? `terminated by ${probe.signal} (CPU instruction not supported)`
         : `exited with code ${probe.status}`;
-      logger.warn(
-        `⚠️  ONNX Runtime probe failed: ${reason} — Erina Memory disabled (stateless mode)`
-      );
-      logger.warn('   This is normal on ARM/MikroTik CPUs without AVX/SSE4 support.');
-      isInitialized = false;
-      return false;
+      logger.warn(`⚠️  ONNX native probe failed: ${reason}`);
+      logger.info('🔄 Falling back to WASM backend (slower but universally compatible)...');
+      useWasm = true;
+    } else {
+      logger.info('✅ ONNX Runtime native probe passed');
     }
 
-    logger.info('✅ ONNX Runtime probe passed — loading embedding model...');
-
     // ── Load embedding model ─────────────────────────
-    logger.info(`🧠 Loading embedding model: ${MODEL_NAME}...`);
+    logger.info(`🧠 Loading embedding model: ${MODEL_NAME}${useWasm ? ' (WASM)' : ' (native)'}...`);
     const startTime = Date.now();
 
-    const { pipeline: createPipeline } = await import('@huggingface/transformers');
+    const { pipeline: createPipeline, env: transformersEnv } = await import('@huggingface/transformers');
 
     const cacheDir = process.env.TRANSFORMERS_CACHE || './data/models';
 
-    extractor = await createPipeline('feature-extraction', MODEL_NAME, {
+    // Pipeline options — use WASM device when native ONNX is unsupported
+    const pipelineOpts = {
       cache_dir: cacheDir,
       quantized: true,
-    });
+    };
+
+    if (useWasm) {
+      // Force WASM backend — bypasses onnxruntime-node entirely
+      pipelineOpts.device = 'wasm';
+
+      // Limit WASM threads for resource-constrained MikroTik
+      if (transformersEnv?.backends?.onnx?.wasm) {
+        transformersEnv.backends.onnx.wasm.numThreads = 1;
+      }
+    }
+
+    extractor = await createPipeline('feature-extraction', MODEL_NAME, pipelineOpts);
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    logger.info(`✅ Embedding model loaded in ${elapsed}s (${MODEL_NAME}, ${EMBEDDING_DIM}-dim)`);
+    const backend = useWasm ? 'WASM' : 'native';
+    logger.info(`✅ Embedding model loaded in ${elapsed}s (${MODEL_NAME}, ${EMBEDDING_DIM}-dim, ${backend})`);
 
     isInitialized = true;
     return true;
