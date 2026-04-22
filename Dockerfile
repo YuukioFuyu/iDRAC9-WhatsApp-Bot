@@ -6,8 +6,8 @@
 # one image for MikroTik Container (single image only).
 #
 # Process management via supervisord:
-#   1. PostgreSQL 16 (pgvector) — Erina Memories + App DB
-#   2. Python FastAPI (Uvicorn) — Redfish Bridge
+#   1. PostgreSQL 16 (pgvector) — via start-postgres.sh wrapper
+#   2. Python FastAPI (Uvicorn) — Redfish Bridge (internal)
 #   3. Node.js (Fastify + Baileys) — WhatsApp Bot + Dashboard
 #
 # Ports:
@@ -17,8 +17,8 @@
 # Build:
 #   docker build -t erina-delvra-foren .
 #
-# Export for MikroTik:
-#   docker save erina-delvra-foren > erina-delvra-foren.tar
+# MikroTik CMD:
+#   /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
 # ═══════════════════════════════════════════════════════
 
 FROM debian:bookworm-slim
@@ -42,7 +42,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PY_API_PORT=8000
 
 # ── 1. Install system packages ─────────────────────
-# Node.js 20 via NodeSource, Python 3.12, PostgreSQL 16, supervisord
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Core tools
     curl gnupg ca-certificates lsb-release \
@@ -90,13 +89,12 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY python-api/app/ /opt/erina-delvra-foren/python-api/app/
 COPY node-app/src/ /opt/erina-delvra-foren/node-app/src/
 
-# ── 6. Copy config files ──────────────────────────
+# ── 6. Copy config + scripts ──────────────────────
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-COPY scripts/init-postgres.sh /opt/erina-delvra-foren/scripts/init-postgres.sh
-COPY scripts/entrypoint.sh /opt/erina-delvra-foren/scripts/entrypoint.sh
+COPY scripts/start-postgres.sh /opt/erina-delvra-foren/scripts/start-postgres.sh
 
-# ── 7. Fix line endings (Windows CRLF → Unix LF) ──
-# Critical: shell scripts with \r\n cause "Exec format error"
+# ── 7. Fix line endings + permissions ─────────────
+# Critical: Windows CRLF → Unix LF (prevents "Exec format error")
 RUN sed -i 's/\r$//' /opt/erina-delvra-foren/scripts/*.sh \
     && chmod +x /opt/erina-delvra-foren/scripts/*.sh
 
@@ -105,4 +103,6 @@ WORKDIR /opt/erina-delvra-foren
 # Ports: Dashboard(3000), PostgreSQL(5432)
 EXPOSE 3000 5432
 
-ENTRYPOINT ["/bin/bash", "/opt/erina-delvra-foren/scripts/entrypoint.sh"]
+# Use CMD (not ENTRYPOINT) for MikroTik Container compatibility
+# MikroTik Container uses CMD field to specify the startup command
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

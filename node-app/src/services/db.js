@@ -109,10 +109,23 @@ const SCHEMA_POSTGRES = `
 // ── Initialize Database ────────────────────────────
 
 /**
- * Connect to PostgreSQL (External primary, Internal fallback).
+ * Wait helper — resolves after ms milliseconds.
+ */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Connect to PostgreSQL with retry logic.
+ * Retries up to maxRetries times with retryDelay between attempts.
+ * Essential for single-container deployment where PostgreSQL may
+ * need time to initialize (especially first run with initdb).
  */
 async function initDatabase() {
-  // 1. Try External PostgreSQL first
+  const maxRetries = 15;
+  const retryDelay = 3000; // 3 seconds between retries
+
+  // 1. Try External PostgreSQL first (no retry — if configured but fails, fallback)
   if (config.db.postgres.isConfigured) {
     try {
       await initPool(config.db.postgres, 'External');
@@ -125,10 +138,24 @@ async function initDatabase() {
     }
   }
 
-  // 2. Fallback to Internal PostgreSQL (memories-db container)
+  // 2. Fallback to Internal PostgreSQL with retry
   if (config.db.fallback.isConfigured) {
-    await initPool(config.db.fallback, 'Internal (memories-db)');
-    return;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await initPool(config.db.fallback, 'Internal (memories-db)');
+        return;
+      } catch (err) {
+        if (attempt < maxRetries) {
+          logger.warn(
+            `⏳ PostgreSQL not ready (attempt ${attempt}/${maxRetries}): ${err.message} — retrying in ${retryDelay / 1000}s...`
+          );
+          await sleep(retryDelay);
+        } else {
+          logger.error(`❌ PostgreSQL failed after ${maxRetries} attempts`);
+          throw err;
+        }
+      }
+    }
   }
 
   throw new Error('No database configured — set PG_HOST or MEM_PG_HOST in .env');
