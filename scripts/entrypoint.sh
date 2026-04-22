@@ -15,15 +15,15 @@ mkdir -p /data/pgdata /data/models /data/sessions
 chown -R postgres:postgres /data/pgdata
 
 # ── Symlink sessions directory ──────────────────────
-# Node.js expects sessions at /app/node-app/sessions
+# Node.js expects sessions at /opt/erina-delvra-foren/node-app/sessions
 # but we want persistent data in /data/sessions
-if [ ! -L /app/node-app/sessions ]; then
-    rm -rf /app/node-app/sessions
-    ln -sf /data/sessions /app/node-app/sessions
+if [ ! -L /opt/erina-delvra-foren/node-app/sessions ]; then
+    rm -rf /opt/erina-delvra-foren/node-app/sessions
+    ln -sf /data/sessions /opt/erina-delvra-foren/node-app/sessions
 fi
 
 # ── Initialize PostgreSQL (first run only) ──────────
-/app/scripts/init-postgres.sh
+/opt/erina-delvra-foren/scripts/init-postgres.sh
 
 # ── Start supervisord ───────────────────────────────
 echo ""

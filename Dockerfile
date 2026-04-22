@@ -15,10 +15,10 @@
 #   5432 — PostgreSQL (external backup/restore access)
 #
 # Build:
-#   docker build -t erina-mikrotik .
+#   docker build -t erina-delvra-foren .
 #
 # Export for MikroTik:
-#   docker save erina-mikrotik > erina-mikrotik.tar
+#   docker save erina-delvra-foren > erina-delvra-foren.tar
 # ═══════════════════════════════════════════════════════
 
 FROM debian:bookworm-slim
@@ -68,36 +68,41 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # ── 2. Setup directory structure ───────────────────
-RUN mkdir -p /app/node-app /app/python-api /data/pgdata /data/models /data/sessions \
+RUN mkdir -p \
+    /opt/erina-delvra-foren/node-app \
+    /opt/erina-delvra-foren/python-api \
+    /opt/erina-delvra-foren/scripts \
+    /data/pgdata /data/models /data/sessions \
     /var/log/supervisor /var/run \
     && chown -R postgres:postgres /data/pgdata
 
 # ── 3. Install Python dependencies ────────────────
-COPY python-api/requirements.txt /app/python-api/
-RUN pip3 install --no-cache-dir --break-system-packages -r /app/python-api/requirements.txt
+COPY python-api/requirements.txt /opt/erina-delvra-foren/python-api/
+RUN pip3 install --no-cache-dir --break-system-packages \
+    -r /opt/erina-delvra-foren/python-api/requirements.txt
 
 # ── 4. Install Node.js dependencies ───────────────
-COPY node-app/package.json node-app/package-lock.json /app/node-app/
-WORKDIR /app/node-app
+COPY node-app/package.json node-app/package-lock.json /opt/erina-delvra-foren/node-app/
+WORKDIR /opt/erina-delvra-foren/node-app
 RUN npm ci --omit=dev && npm cache clean --force
 
 # ── 5. Copy application source code ───────────────
-COPY python-api/app/ /app/python-api/app/
-COPY node-app/src/ /app/node-app/src/
+COPY python-api/app/ /opt/erina-delvra-foren/python-api/app/
+COPY node-app/src/ /opt/erina-delvra-foren/node-app/src/
 
 # ── 6. Copy config files ──────────────────────────
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-COPY scripts/init-postgres.sh /app/scripts/init-postgres.sh
-RUN chmod +x /app/scripts/init-postgres.sh
+COPY scripts/init-postgres.sh /opt/erina-delvra-foren/scripts/init-postgres.sh
+COPY scripts/entrypoint.sh /opt/erina-delvra-foren/scripts/entrypoint.sh
 
-# ── 7. Entrypoint ─────────────────────────────────
-# init-postgres.sh handles first-run DB setup, then execs supervisord
-COPY scripts/entrypoint.sh /app/scripts/entrypoint.sh
-RUN chmod +x /app/scripts/entrypoint.sh
+# ── 7. Fix line endings (Windows CRLF → Unix LF) ──
+# Critical: shell scripts with \r\n cause "Exec format error"
+RUN sed -i 's/\r$//' /opt/erina-delvra-foren/scripts/*.sh \
+    && chmod +x /opt/erina-delvra-foren/scripts/*.sh
 
-WORKDIR /app
+WORKDIR /opt/erina-delvra-foren
 
 # Ports: Dashboard(3000), PostgreSQL(5432)
 EXPOSE 3000 5432
 
-ENTRYPOINT ["/app/scripts/entrypoint.sh"]
+ENTRYPOINT ["/bin/bash", "/opt/erina-delvra-foren/scripts/entrypoint.sh"]

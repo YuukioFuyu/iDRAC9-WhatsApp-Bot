@@ -15,17 +15,17 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: erina-mikrotik
+    container_name: erina-delvra-foren
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-3000}:3000"       # Web Dashboard + WhatsApp Bot
-      - "5432:5432"                     # PostgreSQL (backup/restore access)
+      - "${APP_PORT:-3000}:3000" # Web Dashboard + WhatsApp Bot
+      - "5432:5432" # PostgreSQL (backup/restore access)
     env_file:
       - .env
     environment:
       - TZ=${TZ:-Asia/Jakarta}
     volumes:
-      - erina-data:/data               # PostgreSQL + Models + Sessions
+      - erina-data:/data # PostgreSQL + Models + Sessions
 
 volumes:
   erina-data:
