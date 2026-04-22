@@ -59,11 +59,13 @@ const SCHEMA_ERINA_MEMORIES = `
  */
 async function init() {
   // Step 1: Create table if not exists
+  logger.info('🔧 [Memory Init] Step 1: Creating erina_memories table...');
   const tableOk = await initTable();
   if (!tableOk) {
     logger.warn('⚠️  Erina Memory table init failed — RAG memory disabled');
     return false;
   }
+  logger.info('✅ [Memory Init] Step 1: Table ready');
 
   // Step 2: Load embedding model
   if (isInitialized) return true;
@@ -80,30 +82,38 @@ async function init() {
     // ── Load embedding model ─────────────────────────
     // onnxruntime-node is removed in Dockerfile (causes SIGILL on ARM64).
     // @huggingface/transformers auto-detects onnxruntime-web (WASM) as fallback.
-    logger.info(`🧠 Loading embedding model: ${MODEL_NAME}...`);
+    logger.info(`🔧 [Memory Init] Step 2: Loading embedding model: ${MODEL_NAME}...`);
     const startTime = Date.now();
 
+    logger.info('   → Importing @huggingface/transformers...');
     const { pipeline: createPipeline, env: transformersEnv } = await import('@huggingface/transformers');
+    logger.info('   → Import OK');
 
     const cacheDir = process.env.TRANSFORMERS_CACHE || './data/models';
+    logger.info(`   → Cache dir: ${cacheDir}`);
 
     // Limit WASM threads for resource-constrained environments (MikroTik)
     if (transformersEnv?.backends?.onnx?.wasm) {
       transformersEnv.backends.onnx.wasm.numThreads = 1;
+      logger.info('   → WASM threads limited to 1');
     }
 
+    logger.info('   → Creating pipeline (this may download the model on first run)...');
     extractor = await createPipeline('feature-extraction', MODEL_NAME, {
       cache_dir: cacheDir,
       quantized: true,
     });
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    logger.info(`✅ Embedding model loaded in ${elapsed}s (${MODEL_NAME}, ${EMBEDDING_DIM}-dim)`);
+    logger.info(`✅ [Memory Init] Step 2: Embedding model loaded in ${elapsed}s (${MODEL_NAME}, ${EMBEDDING_DIM}-dim)`);
 
     isInitialized = true;
     return true;
   } catch (err) {
-    logger.error({ err: err.message }, 'Failed to load embedding model — RAG memory disabled');
+    logger.error(
+      { err: err.message, stack: err.stack },
+      '❌ [Memory Init] Step 2 FAILED — embedding model could not load. RAG memory disabled.'
+    );
     isInitialized = false;
     return false;
   } finally {
@@ -185,7 +195,12 @@ async function embedText(text) {
  */
 async function saveMemory(role, content, metadata = {}) {
   const pool = getPgPool();
-  if (!pool || !isInitialized) return;
+  if (!pool || !isInitialized) {
+    if (!isInitialized) {
+      logger.debug('saveMemory skipped — embedding model not initialized');
+    }
+    return;
+  }
 
   try {
     const embedding = await embedText(content);
