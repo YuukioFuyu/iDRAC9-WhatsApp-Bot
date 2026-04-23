@@ -73,3 +73,13 @@ logs/
 # Tailwind build output (regenerated)
 # ══════════════════════════════════════════
 node-app/src/public/css/output.css
+
+# ══════════════════════════════════════════
+# Local Tools (not part of the bot)
+# ══════════════════════════════════════════
+Erina-Chat-Injector/
+
+# ══════════════════════════════════════════
+# Database dumps (contain credentials)
+# ══════════════════════════════════════════
+*.sql
